@@ -301,6 +301,13 @@ class Lifter:
         # look back (in address order) for "cmp idx, N" + ja, or a byte-table "movzx idx, byte [x + table2]"
         va = i.address; back = []
         p = self.prev_insns(i.address, 8)
+        # the instructions the function walk decoded just before (a backward decode can start mid-instruction)
+        walked = []; a = i.address
+        for _ in range(8):
+            q = next((insns[v] for v in range(a - 1, a - 16, -1) if v in insns and v + insns[v].size == a), None)
+            if q is None: break
+            walked.insert(0, q); a = q.address
+        if len(walked) >= 3: p = walked
         for q in reversed(p):
             if q.mnemonic == 'cmp' and q.operands[0].type == X.X86_OP_REG and q.operands[1].type == X.X86_OP_IMM \
                     and q.reg_name(q.operands[0].reg) == idx:
