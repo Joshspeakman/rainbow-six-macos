@@ -1,0 +1,15 @@
+name: Linux checks
+on: [push, pull_request]
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang python3-venv pkg-config libsdl2-dev libfreetype-dev libfontconfig-dev libsndfile1-dev libglew-dev libpng-dev zlib1g-dev xvfb xauth
+      - name: Install recompiler test dependency
+        run: |
+          python3 -m venv recomp/.venv
+          recomp/.venv/bin/pip install capstone==5.0.7
+      - name: Platform, transport and renderer checks
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' env LIBGL_ALWAYS_SOFTWARE=1 bash recomp/tests/check_linux.sh

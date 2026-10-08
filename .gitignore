@@ -1,0 +1,36 @@
+build/
+*.o
+.DS_Store
+# never commit game files
+*.exe
+*.dll
+*.DLL
+*.asi
+*.m3d
+*.flt
+*.ds2radar
+__pycache__/
+*.dsres
+*.ds2res
+*.ds2map
+*.ds2party
+*.ds2save
+*.dssave
+*.dsasave
+# recompiler: environment and everything generated from the user's executable (never commit)
+recomp/.venv
+recomp/work/
+recomp/out/
+
+# Local installation credentials and audio captures
+cdkey-hash.txt
+*.wav
+
+# Delta Force game data (never commit)
+*.pff
+*.sbf
+*.ply
+*.KDV
+*.kdv
+*.bik
+*.BIK
