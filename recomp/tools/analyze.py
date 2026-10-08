@@ -67,6 +67,17 @@ for site in pe.relocs():
     if is_code(site): continue
     v = pe.u32(site)
     if v is not None and TLO <= v < THI and v not in seeds and ins_at(v) is not None: seeds[v] = 'reloc'
+# pointer tables inside hand-written code sections (Delta Force 2's MASM _text/_TEXT: interpreter handler tables): runs of
+# at least three aligned dwords that all point at plausible code
+for name, sva, vs, ra, rs, fl in pe.sections:
+    if not fl & 0x20000000 or name in ('.text', '.bind') or name.startswith('AUTO'): continue
+    blob = pe.bytes_at(sva, min(vs, rs)); run = []
+    for k in range(0, len(blob) - 3, 4):
+        v = int.from_bytes(blob[k:k + 4], 'little')
+        if TLO <= v < THI and v != sva + k and plausible(v): run.append(v); continue
+        if len(run) >= 3:
+            for t in run: cands.setdefault(t, 'table' + name)
+        run = []
 funcs = {}; work = list(seeds); ptrsrc = dict(seeds)
 jumptables = []; jt_unresolved = []; decode_fail = []
 def jumptable(i, prev):            # jmp dword ptr [reg*4 + table]: bound from a preceding cmp reg, N / ja
