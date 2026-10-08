@@ -37,6 +37,11 @@ static void fault(Ctx *c, uint32_t pc, const char *what)
     abort();
 }
 void rt_unhandled(Ctx *c, uint32_t pc, const char *what) { fault(c, pc, what); __builtin_unreachable(); }
+void rt_slot_unknown(Ctx *c, uint32_t pc, uint64_t bytes)        /* lift.py emit_slot: a code slot with bytes not in its table */
+{
+    static __thread char buf[96]; snprintf(buf, sizeof buf, "code slot holds bytes %016llx, not in its table", (unsigned long long)bytes);
+    fault(c, pc, buf); __builtin_unreachable();
+}
 void rt_div_fault(Ctx *c, uint32_t pc) { fault(c, pc, "integer divide fault"); __builtin_unreachable(); }
 
 #ifdef DS2_BROKEN_WORLD

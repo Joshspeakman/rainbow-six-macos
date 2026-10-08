@@ -283,6 +283,7 @@ typedef void (*GuestFn)(Ctx *);
 void     rt_call(Ctx *c, uint32_t target);       /* indirect call: function table or import thunk; fatal if unknown */
 void     rt_import(Ctx *c, uint32_t index);      /* imported function `index` (return address on the guest stack) */
 void     rt_unhandled(Ctx *c, uint32_t pc, const char *what) __attribute__((noreturn));
+void     rt_slot_unknown(Ctx *c, uint32_t pc, uint64_t bytes) __attribute__((noreturn));
 void     rt_div_fault(Ctx *c, uint32_t pc) __attribute__((noreturn));
 uint64_t rt_rdtsc(void);
 void     rt_hook(Ctx *c, uint32_t addr);                   /* lift.py HOOKS: native features (runtime/win32/hooks.c) */

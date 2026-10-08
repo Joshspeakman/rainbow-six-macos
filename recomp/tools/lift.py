@@ -185,12 +185,15 @@ class Lifter:
         slot is lifted as a dispatch over the table's entries, matched on the bytes in guest memory when it runs.
         Returns {slot va: (length, [variant bytes])}."""
         def table(va, stride, skip, n, max_entries):
+            # entries on both sides of the base: the index is signed (sar), negative multipliers sit below it
+            return table_dir(va, stride, skip, n, max_entries, -1)[::-1] + table_dir(va, stride, skip, n, max_entries, 1)
+        def table_dir(va, stride, skip, n, max_entries, sign):
             out = []
-            for k in range(max_entries):
+            for k in (range(max_entries) if sign > 0 else range(-1, -max_entries - 1, -1)):
                 b = self.pe.bytes_at(va + stride * k + skip, n)
                 ds = list(self.md.disasm(b, 0))
                 if len(b) != n or sum(d.size for d in ds) != n: break
-                if not all(d.mnemonic in ('lea', 'mov', 'nop', 'shl', 'sar', 'shr', 'add', 'sub') and
+                if not all(d.mnemonic in ('lea', 'mov', 'nop', 'shl', 'sar', 'shr', 'add', 'sub', 'neg') and
                            all(o.type != X.X86_OP_MEM or d.mnemonic == 'lea' for o in d.operands) for d in ds): break
                 out.append(b)
             return out
@@ -230,7 +233,7 @@ class Lifter:
             for d in self.md.disasm(b, i.address): body.append(self.emit(d, f, insns, callees))
             key = int.from_bytes(b, 'little')
             cases.append('case 0x%xull: { %s } break;' % (key, ' '.join(body)))
-        return '{ uint64_t slot = %s; switch (slot) { %s default: SPILL; rt_unhandled(c, 0x%08xu, "code slot holds bytes not in its table"); } }' % (
+        return '{ uint64_t slot = %s; switch (slot) { %s default: SPILL; rt_slot_unknown(c, 0x%08xu, slot); } }' % (
             load, ' '.join(cases), i.address)
 
     def emit_smc(self, i, f, insns, callees):
