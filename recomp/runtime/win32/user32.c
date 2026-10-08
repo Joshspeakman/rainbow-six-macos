@@ -194,6 +194,7 @@ IMPL(user32, ClientToScreen)
     int x, y; client_origin(w, &x, &y);
     rt_w32(G_MEM, p, rt_r32(G_MEM, p) + (uint32_t)x); rt_w32(G_MEM, p + 4, rt_r32(G_MEM, p + 4) + (uint32_t)y); RET(1, 2);
 }
+void w32_client_to_screen(uint32_t hwnd, int *x, int *y) { Win *w = W(hwnd); int ox = 0, oy = 0; if (w) client_origin(w, &ox, &oy); *x += ox; *y += oy; }
 IMPL(user32, ScreenToClient)
 {
     Win *w = W(ARG(0)); uint32_t p = ARG(1); if (!w) RET(0, 2);
@@ -317,6 +318,13 @@ void w32_relative_cursor(int enabled) {
 }
 void w32_post(uint32_t tid, uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp)
 {
+#ifdef DF_EDITION
+    /* mouse messages carry client coordinates; the host and SetCursorPos give screen ones (Delta Force 2's windowed and
+     * Direct3D modes put the window where it isn't at the screen's origin) */
+    if (msg >= 0x200 && msg <= 0x209 && msg != 0x20a) { Win *w = W(hwnd); if (w) { int ox, oy; client_origin(w, &ox, &oy);
+        { static int lg = -1; if (lg < 0) lg = getenv("DF_MOUSELOG") != 0; if (lg) fprintf(stderr, "mouse: msg %x screen %d,%d origin %d,%d\n", msg, (int16_t)(lp & 0xffff), (int16_t)(lp >> 16), ox, oy); }
+        lp = ((uint32_t)(uint16_t)((int16_t)(lp >> 16) - oy) << 16) | (uint16_t)((int16_t)(lp & 0xffff) - ox); } }
+#endif
     pthread_mutex_lock(&qlock);
     Queue *q = Q(tid);
     /* Consecutive motion messages describe the latest position. Avoid filling
@@ -447,6 +455,7 @@ IMPL(user32, SetCursorPos)
     int dx=0,dy=0;
     if(cursor_relative && cursor_read.valid && cursor_read.epoch==cursor_epoch) { dx=cursor_x-cursor_read.x; dy=cursor_y-cursor_read.y; }
     cursor_x=(int)ARG(0)+dx; cursor_y=(int)ARG(1)+dy; cursor_read.valid=0; cursor_epoch++;
+    { static int lg = -1; if (lg < 0) lg = getenv("DF_MOUSELOG") != 0; if (lg) fprintf(stderr, "mouse: SetCursorPos %d,%d\n", (int)ARG(0), (int)ARG(1)); }
     pthread_mutex_unlock(&cursor_lock);
     if (w32_host_set_cursor_pos) w32_host_set_cursor_pos((int)ARG(0), (int)ARG(1));
 #ifdef DF_EDITION
@@ -465,6 +474,9 @@ void w32_set_cursor(int x, int y) { pthread_mutex_lock(&cursor_lock); cursor_x =
 void w32_move_cursor(int dx, int dy, int w, int h, int *ox, int *oy)
 {
     pthread_mutex_lock(&cursor_lock);
+#ifdef DF_EDITION
+    if (w < w32_screen_w) w = w32_screen_w; if (h < w32_screen_h) h = w32_screen_h;   /* windowed: the window's centre is in desktop coordinates */
+#endif
     cursor_x += dx; cursor_y += dy;
     if (cursor_x < 0) cursor_x = 0; if (cursor_y < 0) cursor_y = 0;
     if (cursor_x > w - 1) cursor_x = w - 1; if (cursor_y > h - 1) cursor_y = h - 1;

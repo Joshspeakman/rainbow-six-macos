@@ -162,6 +162,12 @@ vertex POut vs_present(uint vid [[vertex_id]])
     float2 c = float2((vid << 1) & 2, vid & 2);   // fullscreen triangle
     POut o; o.pos = float4(c * 2 - 1, 0, 1); o.uv = float2(c.x, 1 - c.y); return o;
 }
+// Depth upload (DSR_DEPTH_UPLOAD): a depth buffer the game wrote with the CPU, from a float texture, pixel for pixel.
+struct ZUOut { float depth [[depth(any)]]; };
+fragment ZUOut fs_zupload(POut in [[stage_in]], texture2d<float> z [[texture(0)]])
+{
+    ZUOut o; o.depth = z.read(uint2(in.pos.xy)).r; return o;
+}
 fragment float4 fs_present(POut in [[stage_in]], texture2d<float> src [[texture(0)]], texture1d<float> lut [[texture(1)]], sampler s [[sampler(0)]])
 {
     float3 c = src.sample(s, in.uv).rgb;

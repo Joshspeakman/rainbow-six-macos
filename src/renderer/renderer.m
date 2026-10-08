@@ -34,7 +34,7 @@ struct DSRRenderer {
     uint32_t smp_k[1024]; id<MTLSamplerState> smp_v[1024]; int pso_n, dso_n, smp_n; uint32_t pso_last;   // filled at most 3/4, then uncached
     /* the current render encoder's state, so unchanged state isn't set again (cleared with each new encoder) */
     struct { __unsafe_unretained id pso, dso, tex[2], smp[2]; int cull, ring_bound; uint32_t sref; MTLViewport vp; } es;
-    id<MTLRenderPipelineState> quad_pso, quad_over_pso, zclear_pso, present_pso; id<MTLTexture> scratch, gamma_lut; uint16_t gamma[3][256]; int gamma_dirty; id<MTLDepthStencilState> zclear_ds, nodepth_ds, zsclear_ds[4];
+    id<MTLRenderPipelineState> quad_pso, quad_over_pso, zclear_pso, zupload_pso, present_pso; id<MTLTexture> zup_tex; id<MTLTexture> scratch, gamma_lut; uint16_t gamma[3][256]; int gamma_dirty; id<MTLDepthStencilState> zclear_ds, nodepth_ds, zsclear_ds[4];
     id<MTLSamplerState> point_clamp, linear_clamp; id<MTLTexture> dummy;
     /* effect programs (DSR_PROG_*): Metal compiled from the game's HLSL effects (runtime/win32/hlsl.c) */
     struct { id<MTLFunction> vs, fs; uint32_t kinds; } prog[1024]; uint32_t cur_prog;
@@ -87,7 +87,9 @@ DSRRenderer *dsr_renderer_create(id<MTLDevice> dev)
         d.vertexFunction = [r->lib newFunctionWithName:@"vs_zclear"]; d.fragmentFunction = nil;
         d.colorAttachments[0].writeMask = MTLColorWriteMaskNone; d.depthAttachmentPixelFormat = d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
         r->zclear_pso = [dev newRenderPipelineStateWithDescriptor:d error:&err];
-        if (!r->quad_pso || !r->zclear_pso) { fprintf(stderr, "helper pipelines: %s\n", err.localizedDescription.UTF8String); exit(1); }
+        d.vertexFunction = [r->lib newFunctionWithName:@"vs_present"]; d.fragmentFunction = [r->lib newFunctionWithName:@"fs_zupload"];
+        r->zupload_pso = [dev newRenderPipelineStateWithDescriptor:d error:&err];   // DSR_DEPTH_UPLOAD: depth from a float texture
+        if (!r->quad_pso || !r->zclear_pso || !r->zupload_pso) { fprintf(stderr, "helper pipelines: %s\n", err.localizedDescription.UTF8String); exit(1); }
         MTLDepthStencilDescriptor *z = [MTLDepthStencilDescriptor new]; z.depthCompareFunction = MTLCompareFunctionAlways; z.depthWriteEnabled = YES;
         r->zclear_ds = [dev newDepthStencilStateWithDescriptor:z];
         z.depthWriteEnabled = NO; r->nodepth_ds = [dev newDepthStencilStateWithDescriptor:z];
@@ -217,6 +219,28 @@ static void surface_upload(DSRRenderer *r, const uint32_t *p, uint32_t size)
     void *dst = ring_alloc(r, pitch * h, &off); memcpy(dst, p + 6, pitch * h);
     [blit_enc(r) copyFromBuffer:r->ring sourceOffset:off sourceBytesPerRow:pitch sourceBytesPerImage:pitch * h sourceSize:MTLSizeMake(w, h, 1)
             toTexture:s->tex destinationSlice:s->slice destinationLevel:s->level destinationOrigin:MTLOriginMake(x, y, 0)];
+}
+
+// DSR_DEPTH_UPLOAD: a depth buffer the game wrote with the CPU (Delta Force 2 draws its terrain in software, depth
+// included, then its Direct3D polygons against it). The values go through the ring into a float texture, then a
+// full-screen pass writes them as depth.
+static void depth_upload(DSRRenderer *r, const uint32_t *p, uint32_t size)
+{
+    Surf *z = surf(r, p[0]), *rt = surf(r, r->rt); uint32_t w = p[1], h = p[2], off;
+    if (!z || z->fmt != 3 || !rt || !w || !h || w != z->w || h != z->h || rt->w != w || rt->h != h || 12 + 4ull * w * h > size) return;
+    if (!r->zup_tex || r->zup_tex.width != w || r->zup_tex.height != h) {
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:w height:h mipmapped:NO];
+        d.usage = MTLTextureUsageShaderRead; d.storageMode = MTLStorageModePrivate; r->zup_tex = [r->dev newTextureWithDescriptor:d];
+    }
+    if (!r->enc) maybe_commit(r);
+    void *dst = ring_alloc(r, w * h * 4, &off); memcpy(dst, p + 3, (size_t)w * h * 4);
+    [blit_enc(r) copyFromBuffer:r->ring sourceOffset:off sourceBytesPerRow:w * 4 sourceBytesPerImage:w * h * 4 sourceSize:MTLSizeMake(w, h, 1)
+            toTexture:r->zup_tex destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+    id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, p[0]);
+    [e setRenderPipelineState:r->zupload_pso]; [e setDepthStencilState:r->zclear_ds]; [e setCullMode:MTLCullModeNone];
+    [e setViewport:(MTLViewport){0, 0, w, h, 0, 1}]; [e setFragmentTexture:r->zup_tex atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    memset(&r->es, 0, sizeof r->es); r->es.cull = -1;
 }
 
 // ---------- quads (blits, fills) ----------
@@ -675,6 +699,7 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_SURFACE_DESTROY: if (p[0] < MAXSURF) { r->s[p[0]].used = 0; r->s[p[0]].tex = nil; } break;
     case DSR_SURFACE_UPLOAD: surface_upload(r, p, size); break;
     case DSR_UPLOAD_OVER: upload_over(r, p, size); break;
+    case DSR_DEPTH_UPLOAD: if (size >= 12) depth_upload(r, p, size); break;
     case DSR_READBACK: readback(r, p); break;
     case DSR_BLT: { int32_t dr[4], sr[4]; memcpy(dr, p + 1, 16); memcpy(sr, p + 6, 16);
                     if (p[5]) quad(r, p[0], dr, p[5], sr, 0, 0); else if (!(p[10] & 0x20000)) quad(r, p[0], dr, 0, dr, 1, p[11]); } break;

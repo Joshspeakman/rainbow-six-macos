@@ -42,6 +42,8 @@ enum {
     DSR_DRAW_PROG_VB,      /* u32 prim, nverts, nindices, flags (1 pretransformed, 2 32-bit indices), u32 index buffer id,
                               u32 index byte offset, i32 base vertex, u32 first vertex (no indices), u32 nelem,
                               {u32 slot, buffer id, byte offset, stride, D3DDECLTYPE}[nelem]: as DSR_DRAW_PROG, from kept buffers */
+    DSR_DEPTH_UPLOAD,      /* u32 depth surface id, u32 w, h, float depth[w*h] (0 near .. 1 far, rows top down): a depth buffer the
+                              game wrote itself (Delta Force 2's software terrain under its Direct3D polygons) */
 };
 #define DSR_VBUFS 65536
 #endif

@@ -383,7 +383,13 @@ IMPL(user32, wvsprintfA) { char buf[1025]; uint32_t n = w32_format(buf, sizeof b
  * loading screens) is accepted and tracked loosely, like the stock objects ---- */
 #define GDI_LOOSE 0x00b80040u
 IMPL(gdi32, SetMapMode) { RET(1, 2); }                                 /* MM_TEXT before */
-IMPL(gdi32, CreatePalette) { RET(GDI_LOOSE + 1, 1); }
+uint32_t w32_logpal[256];                                               /* the last logical palette (PALETTEENTRY r, g, b, flags) */
+IMPL(gdi32, CreatePalette)                                              /* (LOGPALETTE *): version, count, entries */
+{
+    uint32_t lp = ARG(0), n = lp ? rt_r16(G_MEM, lp + 2) : 0; if (n > 256) n = 256;
+    for (uint32_t k = 0; k < n; k++) w32_logpal[k] = rt_r32(G_MEM, lp + 4 + 4 * k);
+    RET(GDI_LOOSE + 1, 1);
+}
 IMPL(gdi32, SelectPalette) { RET(GDI_LOOSE + 1, 3); }
 IMPL(gdi32, RealizePalette) { RET(0, 1); }
 IMPL(gdi32, UnrealizeObject) { RET(1, 1); }

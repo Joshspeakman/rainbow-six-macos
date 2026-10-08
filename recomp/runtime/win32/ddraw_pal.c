@@ -269,7 +269,17 @@ static void bleed_edges(uint32_t *px, uint32_t w, uint32_t h)
 }
 static void gpu_upload(PSurf *s)
 {
-    if (!s->gid || s->gkind == 2) return;
+    if (s->gid && s->gkind == 2) {                                   /* a depth buffer the game filled itself: its values, 0..1 */
+        uint32_t n = s->w * s->h, *p = cmd_begin(DSR_DEPTH_UPLOAD, 12 + n * 4); float *z = (float *)(p + 3);
+        p[0] = s->gid; p[1] = s->w; p[2] = s->h;
+        for (uint32_t y = 0; y < s->h; y++) {
+            const uint8_t *row = G_MEM + s->mem + y * s->pitch;
+            if (s->bpp == 16) for (uint32_t x = 0; x < s->w; x++) z[y * s->w + x] = (float)(row[2 * x] | row[2 * x + 1] << 8) * (1.0f / 65535.0f);
+            else for (uint32_t x = 0; x < s->w; x++) { uint32_t v; memcpy(&v, row + 4 * x, 4); z[y * s->w + x] = (float)((double)v * (1.0 / 4294967295.0)); }
+        }
+        cmd_end(); s->gpu_newer = 0; return;
+    }
+    if (!s->gid) return;
     uint32_t *p = cmd_begin(DSR_SURFACE_UPLOAD, 24 + s->w * s->h * 4);
     p[0] = s->gid; p[1] = 0; p[2] = 0; p[3] = s->w; p[4] = s->h; p[5] = s->w * 4;
     surf_to_bgra(s, p + 6);

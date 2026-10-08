@@ -115,18 +115,63 @@ IMPL(user32, DialogBoxParamA)                                      /* (instance,
 }
 IMPL(user32, SendDlgItemMessageA) { RET(0, 5); }
 
-/* ---- gdi32: the games draw through DirectDraw; GDI palette calls succeed ---- */
-IMPL(gdi32, SetPaletteEntries) { RET(ARG(2), 4); }
-IMPL(gdi32, SetSystemPaletteUse) { RET(1, 2); }                    /* SYSPAL_STATIC */
-IMPL(gdi32, StretchDIBits)
+/* ---- gdi32: windowed mode. Both games can run in a window, drawing each frame with StretchDIBits (Delta Force 2) or
+ * SetDIBitsToDevice (Delta Force); the picture becomes the frame on screen, as DirectDraw's primary does. ---- */
+extern uint32_t w32_logpal[256];                                        /* sims_imports.c: CreatePalette */
+IMPL(gdi32, SetPaletteEntries)                                          /* (palette, first, count, entries) */
 {
-    static int once; if (!once++) fprintf(stderr, "w32: gdi32!StretchDIBits: not shown (GDI output)\n");
+    uint32_t st = ARG(1), n = ARG(2);
+    for (uint32_t k = 0; k < n && st + k < 256; k++) w32_logpal[st + k] = rt_r32(G_MEM, ARG(3) + 4 * k);
+    RET(n, 4);
+}
+IMPL(gdi32, SetSystemPaletteUse) { RET(1, 2); }                         /* SYSPAL_STATIC */
+uint32_t *dsr_frame_begin(uint32_t w, uint32_t h); void dsr_frame_end(Ctx *c); void dsr_frame_palette(const uint32_t *bgra);
+/* a DIB's rectangle, scaled to dw x dh, as the frame on screen. usage 0: RGBQUAD colour table, 1: indices into the
+ * logical palette */
+static void dib_show(Ctx *c, int32_t dw, int32_t dh, int32_t sx, int32_t sy, int32_t sw, int32_t sh, uint32_t bits, uint32_t bmi, uint32_t usage)
+{
+    int32_t w = (int32_t)rt_r32(G_MEM, bmi + 4), h = (int32_t)rt_r32(G_MEM, bmi + 8), ah = h < 0 ? -h : h;
+    uint32_t hsz = rt_r32(G_MEM, bmi), bpp = rt_r16(G_MEM, bmi + 14), comp = rt_r32(G_MEM, bmi + 16), used = rt_r32(G_MEM, bmi + 32);
+    if (w <= 0 || !ah || dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 || dw > 4096 || dh > 4096 || (bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)) return;
+    uint32_t pitch = ((uint32_t)w * bpp / 8 + 3) & ~3u, lut[256] = {0};
+    uint32_t rm = 0x7c00, gm = 0x3e0, bm = 0x1f;
+    if (bpp == 16 && comp == 3) { rm = rt_r32(G_MEM, bmi + hsz); gm = rt_r32(G_MEM, bmi + hsz + 4); bm = rt_r32(G_MEM, bmi + hsz + 8); }
+    if (bpp == 8) {
+        uint32_t n = used && used <= 256 ? used : 256;
+        for (uint32_t k = 0; k < n; k++) {
+            uint32_t e;
+            if (usage == 1) { uint32_t i = rt_r16(G_MEM, bmi + hsz + 2 * k) & 255, p = w32_logpal[i]; e = (p & 255) << 16 | (p & 0xff00) | (p >> 16 & 255); }
+            else e = rt_r32(G_MEM, bmi + hsz + 4 * k) & 0xffffff;          /* RGBQUAD: b, g, r */
+            lut[k] = 0xff000000u | e;
+        }
+        dsr_frame_palette(lut);
+    }
+    uint32_t *out = dsr_frame_begin((uint32_t)dw, (uint32_t)dh);
+    for (int32_t y = 0; y < dh; y++) {
+        int32_t yy = sy + (int32_t)((int64_t)y * sh / dh); if (yy >= ah) yy = ah - 1;
+        const uint8_t *row = G_MEM + bits + (uint32_t)(h < 0 ? yy : ah - 1 - yy) * pitch;
+        for (int32_t x = 0; x < dw; x++) {
+            int32_t xx = sx + (int32_t)((int64_t)x * sw / dw); if (xx >= w) xx = w - 1;
+            uint32_t v;
+            if (bpp == 8) v = lut[row[xx]];
+            else if (bpp == 16) { uint32_t p = (uint32_t)(row[2 * xx] | row[2 * xx + 1] << 8);
+                v = 0xff000000u | (uint32_t)((p & rm) * 255 / rm) << 16 | (uint32_t)((p & gm) * 255 / gm) << 8 | (uint32_t)((p & bm) * 255 / bm); }
+            else if (bpp == 24) v = 0xff000000u | (uint32_t)row[3 * xx + 2] << 16 | (uint32_t)row[3 * xx + 1] << 8 | row[3 * xx];
+            else { memcpy(&v, row + 4 * xx, 4); v |= 0xff000000u; }
+            out[(uint32_t)y * (uint32_t)dw + (uint32_t)x] = v;
+        }
+    }
+    dsr_frame_end(c);
+}
+IMPL(gdi32, StretchDIBits)          /* (dc, x, y, w, h, src x, y, w, h, bits, BITMAPINFO, usage, rop) -> lines */
+{
+    dib_show(c, (int32_t)ARG(3), (int32_t)ARG(4), (int32_t)ARG(5), (int32_t)ARG(6), (int32_t)ARG(7), (int32_t)ARG(8), ARG(9), ARG(10), ARG(11));
     RET(ARG(8), 13);
 }
-IMPL(gdi32, SetDIBitsToDevice)
+IMPL(gdi32, SetDIBitsToDevice)      /* (dc, x, y, w, h, src x, y, start scan, lines, bits, BITMAPINFO, usage) -> lines */
 {
-    static int once; if (!once++) fprintf(stderr, "w32: gdi32!SetDIBitsToDevice: not shown (GDI output)\n");
-    RET(ARG(7), 12);
+    dib_show(c, (int32_t)ARG(3), (int32_t)ARG(4), (int32_t)ARG(5), (int32_t)ARG(6), (int32_t)ARG(3), (int32_t)ARG(4), ARG(9), ARG(10), ARG(11));
+    RET(ARG(8), 12);
 }
 
 /* ---- winmm: no MIDI devices, no joystick (yet) ---- */

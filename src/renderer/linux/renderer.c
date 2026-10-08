@@ -221,6 +221,15 @@ static void upload(DSRRenderer *r,const uint32_t *p,uint32_t size,int over) {
  glTexSubImage2D(over?GL_TEXTURE_2D:face_target(s),over?0:s->level,over?0:p[1],over?0:p[2],w,h,GL_BGRA,GL_UNSIGNED_BYTE,p+6); glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
  if(over) { int32_t dr[4]={p[1],p[2],p[1]+w,p[2]+h},sr[4]={0,0,w,h}; blit(r,p[0],dr,0,sr,2,0); }
 }
+/* DSR_DEPTH_UPLOAD: a depth buffer the game wrote with the CPU, packed as 24-bit depth + 8-bit stencil */
+static void depth_upload(DSRRenderer *r,const uint32_t *p,uint32_t size) {
+ Surf *s=surf(r,p[0]); uint32_t w=p[1],h=p[2];
+ if(!s || s->fmt!=3 || !w || !h || w!=s->w || h!=s->h || 12ull+4ull*w*h>size) return;
+ const float *z=(const float *)(p+3); uint32_t *pk=malloc((size_t)w*h*4); if(!pk) return;
+ for(size_t k=0;k<(size_t)w*h;k++) { float v=z[k]<0?0:z[k]>1?1:z[k]; pk[k]=((uint32_t)(v*16777215.0f+0.5f))<<8; }
+ glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D,s->tex); glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+ glTexSubImage2D(GL_TEXTURE_2D,s->level,0,0,w,h,GL_DEPTH_STENCIL,GL_UNSIGNED_INT_24_8,pk); free(pk);
+}
 static GLenum blend(uint32_t b) {   /* D3DBLEND: 12/13 (BOTHSRCALPHA) are handled by the caller */
  static const GLenum v[]={GL_ONE,GL_ZERO,GL_ONE,GL_SRC_COLOR,GL_ONE_MINUS_SRC_COLOR,GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_DST_ALPHA,GL_ONE_MINUS_DST_ALPHA,GL_DST_COLOR,GL_ONE_MINUS_DST_COLOR,GL_SRC_ALPHA_SATURATE,
                           GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_CONSTANT_COLOR,GL_ONE_MINUS_CONSTANT_COLOR};
@@ -560,6 +569,7 @@ int dsr_gl_exec(DSRRenderer *r,uint32_t op,const uint8_t *data,uint32_t size) {
  case DSR_RENDER_STATE: case DSR_TEXTURE: case DSR_SET_RT: need=8; break;
  case DSR_TSS: need=12; break; case DSR_TRANSFORM: need=68; break;
  case DSR_VIEWPORT: case DSR_READBACK: case DSR_SURFACE_UPLOAD: case DSR_UPLOAD_OVER: need=24; break;
+ case DSR_DEPTH_UPLOAD: need=12; break;
  case DSR_CLEAR: need=20; break; case DSR_DRAW: need=16; break;
  case DSR_SURFACE_CREATE: need=28; break; case DSR_SURFACE_DESTROY: case DSR_PRESENT: need=4; break;
  case DSR_BLT: need=48; break; case DSR_GLSL_CREATE: need=16; break; case DSR_PROG_USE: need=4; break;
@@ -579,6 +589,7 @@ int dsr_gl_exec(DSRRenderer *r,uint32_t op,const uint8_t *data,uint32_t size) {
  case DSR_SURFACE_CREATE: create_surface(r,p,size); break;
  case DSR_SURFACE_DESTROY: if(p[0]<MAXSURF) { Surf *s=&r->s[p[0]]; if(s->used && s->root==p[0]) { glDeleteTextures(1,&s->tex); if(s->ms) glDeleteTextures(1,&s->ms); } s->ms=0; s->used=0; } break;
  case DSR_SURFACE_UPLOAD: upload(r,p,size,0); break;
+ case DSR_DEPTH_UPLOAD: depth_upload(r,p,size); break;
  case DSR_UPLOAD_OVER: upload(r,p,size,1); break;
  case DSR_READBACK: readback(r,p); break;
  case DSR_BLT: if(p[5]) blit(r,p[0],(const int32_t *)(p+1),p[5],(const int32_t *)(p+6),0,0); else if(!(p[10]&0x20000)) blit(r,p[0],(const int32_t *)(p+1),0,(const int32_t *)(p+1),1,p[11]); break;

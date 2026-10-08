@@ -71,7 +71,11 @@ static void rel_motion(double gx,double gy) {
  static double fx,fy; fx+=gx; fy+=gy; int dx=(int)fx,dy=(int)fy; fx-=dx; fy-=dy; if(!dx&&!dy) return;
  uint32_t w,h; dsr_mode_size(&w,&h); int x,y; w32_move_cursor(dx,dy,w,h,&x,&y); vcur_x=x; vcur_y=y; post(0x200,mk(),pos_lp());
 }
-static void window_created(uint32_t w,int x,int y,int width,int height,uint32_t style) { (void)x;(void)y;(void)width;(void)height;(void)style; if(!game_hwnd) game_hwnd=w; }
+static void window_created(uint32_t w,int x,int y,int width,int height,uint32_t style) { (void)x;(void)y;(void)width;(void)height;
+#ifdef DF_EDITION
+ if(!(style&0x40000000u)) { game_hwnd=w; return; }   /* Delta Force 2 makes a new main window when it changes driver: input goes to the newest */
+#endif
+ (void)style; if(!game_hwnd) game_hwnd=w; }
 static void window_changed(uint32_t w,int x,int y,int width,int height,int visible) { (void)w;(void)x;(void)y;(void)width;(void)height;(void)visible; }
 static void *game_thread(void *arg) { (void)arg; char msg[256]; game_code=w32_run(msg,sizeof msg); fprintf(stderr,"game: %s\n",msg); game_running=0; return NULL; }
 static void mkdirs(const char *path) { char s[2048]; snprintf(s,sizeof s,"%s",path); for(char *p=s+1;*p;p++) if(*p=='/') { *p=0; mkdir(s,0755); *p='/'; } mkdir(s,0755); }
@@ -219,6 +223,9 @@ static int mot_dx, mot_dy, mot_home, mot_pending;
 static void motion_tick(void)
 {
     if (!mot_home) return;
+#ifdef DF_EDITION
+    { extern void w32_client_to_screen(uint32_t, int *, int *); w32_client_to_screen(game_hwnd, &mot_dx, &mot_dy); }   /* script points are the game's */
+#endif
     vcur_x = mot_dx; vcur_y = mot_dy; w32_set_cursor(mot_dx, mot_dy);
     post(0x200, 0, ((uint32_t)mot_dy << 16) | ((uint32_t)mot_dx & 0xffff));
     mot_home = mot_dx = mot_dy = mot_pending = 0;
