@@ -45,7 +45,6 @@ LAUNCH
   echo "== done: run $ID (data in $DATA)"; exit 0
 fi
 
-"$HERE/recomp/tools/build_app.sh" "$OUT" >/dev/null
 APPS="${APPS:-$HOME/Applications}"; A="$APPS/$NAME.app"; echo "== installing $A"
 mkdir -p "$APPS"; rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources"
 cp "$OUT/app/$BIN" "$OUT/app/shaders.metal" "$OUT/app/dsr_snapshot.bin" "$A/Contents/MacOS/"

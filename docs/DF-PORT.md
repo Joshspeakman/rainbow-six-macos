@@ -93,8 +93,8 @@ Click scripts that reach a mission (test host, `DS_TEST=1`, game coordinates 640
 - DF2 Windowed: mouse-look does not respond after switching to Windowed in the same session (it does when the game
   starts in Windowed). SetCursorPos is never called in that mode; not yet investigated.
 - LAN multiplayer: Netsock.dll is recompiled and its imports are implemented, but no game has been hosted or joined.
-- Direct3D mode was compared against one reference frame per mission start; effects such as explosions and smoke in
-  hardware mode have not been looked at.
+- Direct3D mode was compared against the original at a mission start: the terrain and its depth, and the textured,
+  alpha-blended snowflakes the hardware driver adds, match; explosions, smoke and other effects have not been looked at.
 - Mouse sensitivity is 1:1 with host pixels; the game's own sensitivity slider applies on top.
 
 ## Tools and switches
