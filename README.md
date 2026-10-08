@@ -1,46 +1,59 @@
-# The Sims Legacy Collection, native
+# Delta Force and Delta Force 2, native
 
-The Sims Legacy Collection (Steam, 2025), statically recompiled from your own copy into native code: the goal is an
-Apple Silicon Mac app, as [dungeon-siege-macos](https://github.com/Joshspeakman/dungeon-siege-macos),
-dungeon-siege-2-macos, diablo-2-macos and fallout-nv-macos do for their games. No Wine, no Rosetta, no emulator.
-Nothing from the game is in this repository: the build regenerates everything locally from your Steam files, and the
-game folder is only read.
+NovaLogic's **Delta Force** (1998) and **Delta Force 2** (1999), statically recompiled from your own Steam copies into
+native code: no Wine, no Rosetta, no emulator. It uses the same recompiler as the Dungeon Siege, Fallout: New Vegas,
+Diablo II and Sims ports. The target is Apple Silicon Macs (Metal, Core Audio); the Linux build (SDL, OpenGL) runs the same
+recompiled code and is where the port has been developed and tested so far.
 
-**State: early work in progress (2026-10-07).** Development runs on Linux first (the same tree builds the Linux and
-the Mac host). The recompiled `Sims.exe` starts, creates its Vulkan device and swapchain, copies the template
-neighbourhood into Saved Games on first run, loads sounds and music, and draws the neighbourhood, Select a Family and
-lot views correctly; clicking a house opens its lot (build/buy panel, the game's notices). Sims walking around a lot
-haven't been tried yet, sound isn't checked, and the Mac host hasn't been built for this game yet. Details and next steps: [docs/SIMS-PORT.md](docs/SIMS-PORT.md).
+Nothing from the games is in this repository. The build verifies your `Df.exe` / `Df2.exe`, undoes the Steam wrapper
+on a copy in the build folder, recompiles that copy, and reads the game's data from your folder.
+
+## State
+
+| | Delta Force (Steam 32620) | Delta Force 2 (Steam 32630) |
+|---|---|---|
+| Menus, soldier, campaign/quick missions, briefing | working (Linux) | working (Linux) |
+| Missions: voxel terrain, models, HUD, movement, mouse-look | working (Linux) | working (Linux) |
+| Renderers | **16 million colours** and **256 colours** (Settings → Colors), **windowed** | **Full Screen (Software)**, **Full Screen (Hardware)** (Direct3D, `Hw_d3d.dll` recompiled), **Windowed** |
+| Sound and music | working (Linux) | working (Linux) |
+| LAN multiplayer (`Netsock.dll`, recompiled) | builds, untested | builds, untested |
+| NovaWorld voice/browser (`Netcomm.dll`, `iBrowse.dll`) | — | not available (stubbed) |
+| macOS app | written, **not yet built** | written, **not yet built** |
+
+"Working (Linux)" means checked against the original game running under Proton with the same inputs (screenshots
+compared). The Mac side (Metal renderer, Core Audio, app host) is shared with the other ports and has the Delta Force
+changes written in, but it has not been compiled or run on a Mac yet: see [docs/DF-PORT.md](docs/DF-PORT.md) for the
+handoff, known gaps and how to test.
+
+## Install
+
+Copy the Steam game folder over from the PC as it is (`steamapps/common/Delta Force` or `.../Delta Force 2`), then:
+
+```sh
+git clone <this repository> && cd delta-force-macos
+./install.sh --game-dir "/path/to/Delta Force"      # Delta Force.app (macOS) or ~/.local/bin/delta-force (Linux)
+./install.sh --game-dir "/path/to/Delta Force 2"    # Delta Force 2.app or delta-force-2
+```
+
+Needs the Xcode command line tools (macOS) or clang plus the SDL2, GLEW, freetype, fontconfig, libsndfile and libpng
+development packages (Linux), and python3. The build takes a minute or two. The game folder is only read; settings,
+soldiers and saves go to the data folder (`~/Games/DeltaForceNative`, `~/Games/DeltaForce2Native`; `--data-dir` to
+choose).
+
+Choose the renderer in the game's own Settings screen, as on Windows.
+
+## Building by hand
+
+```sh
+recomp/build_df.sh "/path/to/Delta Force 2"           # -> recomp/work/df2 (Linux: app/DeltaForce2Linux; macOS: libgame.dylib + app/DeltaForce2)
+recomp/work/df2/app/DeltaForce2Linux --exe recomp/work/df2/Df2.exe --game "/path/to/Delta Force 2" --data /tmp/df2data
+```
+
+`DF_RELINK=1 recomp/build_df.sh ...` rebuilds only the runtime and host (after changes there).
 
 ## How it works
 
-- `recomp/tools/steamstub.py` undoes the Steam wrapper on a copy of the player's own `Sims.exe` in the build folder
-  (the code section is AES-encrypted by SteamStub 3.1; the key is in the stub's header).
-- `recomp/tools/analyze.py` and `lift.py` turn the executable into one C function per original function (40,022 of
-  them, 96.1% of the code), along with the game's own `gimex.dll` and `ijl10.dll`; clang compiles them.
-- `recomp/runtime/win32` implements the Windows APIs the game uses (kernel32, user32, gdi32, advapi32, winmm, the
-  C runtime's Vista-era synchronisation, an offline Steam that owns the game, ...).
-- The game draws with Vulkan. `recomp/tools/gen_vulkan.py` generates, from the Khronos registry, a thunk for each of
-  the 113 Vulkan commands the game uses, converting structures between the 32-bit game's layout and the host's
-  (`runtime/win32/vulkan_gen.c`); `runtime/win32/vulkan.c` does instances, devices, surfaces and mapped memory (placed
-  inside the game's 4 GB with `VK_EXT_map_memory_placed`, shadowed where the driver lacks it). On Linux it runs on the
-  system's Vulkan; on the Mac it will run on MoltenVK.
-
-## Build and run (Linux, for development)
-
-Needs clang, python3, SDL2, and the game installed by Steam (app 3314060, build 17905164).
-
-```sh
-G="$HOME/.local/share/Steam/steamapps/common/The Sims Legacy Collection"   # or your Steam library
-recomp/build_sims.sh "$G/Sims.exe"                  # -> recomp/work/sims/app/SimsLinux (about 4 minutes)
-recomp/work/sims/app/SimsLinux --exe recomp/work/sims/Sims.exe --game "$G" --data ~/Games/SimsNative
-```
-
-`SIMS_RELINK=1 recomp/build_sims.sh ...` relinks after runtime changes without recompiling the game.
-
-Testing: `DS_TEST=1` (hidden 1024×768 window), `DS_SCRIPT="800:click:336,108"` (clicks at presented frames),
-`W32_VK_SHOT=<prefix> W32_VK_SHOT_AT=<frames>` (screenshots of presented frames), `W32_TRACE=<file>` (every Windows
-and Vulkan call), `W32_VKLOG=1`, `W32_MSGLOG=1`, `W32_STEAMLOG=1`, `W32_VK_SHADOW=1` (shadowed mappings, as on the
-Mac).
-
-Notices and credits: [NOTICE.md](NOTICE.md).
+[docs/DF-PORT.md](docs/DF-PORT.md) covers what was specific to these games: the SteamStub 2.1 wrapper, the self-modifying
+MMX span renderers (instruction fields patched at run time, and multiply-by-constant code copied in from tables), Watcom
+C quirks, DirectDraw and Direct3D 6 on the shared renderer (including depth buffers the game writes itself), and the
+testing tools. The recompiler itself is described in [recomp/README.md](recomp/README.md).

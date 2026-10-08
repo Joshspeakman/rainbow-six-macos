@@ -11,8 +11,9 @@ CC=(clang "${COMPAT_FLAGS[@]}")
 read -ra CF <<< "$(pkg-config --cflags sdl2 freetype2 fontconfig sndfile glew libpng)"
 read -ra GL <<< "$(pkg-config --libs sdl2 glew libpng)"
 for f in recomp/runtime/rt.c recomp/runtime/win32/*.c recomp/host/linux.c src/renderer/linux/renderer.c; do
-    "${CC[@]}" -fsyntax-only -D_GNU_SOURCE -I recomp/runtime -I recomp/third_party/mojoshader -I recomp/third_party/minimp3 "${CF[@]}" "$f"
-    "${CC[@]}" -fsyntax-only -D_GNU_SOURCE -DFNV_EDITION -I recomp/runtime -I recomp/third_party/mojoshader -I recomp/third_party/minimp3 "${CF[@]}" "$f"
+    "${CC[@]}" -fsyntax-only -D_GNU_SOURCE -I recomp/runtime -I recomp/third_party/mojoshader -I recomp/third_party/minimp3 -I recomp/third_party/vulkan/include "${CF[@]}" "$f"
+    "${CC[@]}" -fsyntax-only -D_GNU_SOURCE -DFNV_EDITION -I recomp/runtime -I recomp/third_party/mojoshader -I recomp/third_party/minimp3 -I recomp/third_party/vulkan/include "${CF[@]}" "$f"
+    "${CC[@]}" -fsyntax-only -D_GNU_SOURCE -DDF_EDITION -DDF2_EDITION -I recomp/runtime -I recomp/third_party/mojoshader -I recomp/third_party/minimp3 -I recomp/third_party/vulkan/include "${CF[@]}" "$f"
 done
 "${CC[@]}" -O1 -g -D_GNU_SOURCE -ffunction-sections -fdata-sections -Wl,--gc-sections -I recomp/runtime \
     -o "$OUT/winsock" recomp/tests/winsock_linux_test.c -pthread

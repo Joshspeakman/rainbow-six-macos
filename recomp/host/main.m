@@ -16,6 +16,7 @@
 #include "../../src/dsr/dsr_proto.h"
 #include "../../src/dsr/dsr_shm.h"
 #include "../runtime/win32/w32.h"
+#include "../runtime/edition.h"
 
 int  w32_prepare(const char *exe, const char *game_dir, const char *drive_c, const char *overlay);
 uint32_t w32_run(char *msg, size_t cap);
@@ -155,6 +156,10 @@ static void motion_tick(void)
 {
     if (mot_home <= 0) return;
     mot_home--;
+#ifdef DF_EDITION
+    { int x = mot_dx, y = mot_dy; extern void w32_client_to_screen(uint32_t, int *, int *); w32_client_to_screen(game_hwnd, &x, &y);   // script points are the game's
+      vcur_x = x; vcur_y = y; w32_set_cursor(x, y); post(0x200, 0, ((uint32_t)y << 16) | ((uint32_t)x & 0xffff)); return; }
+#endif
     vcur_x = mot_dx; vcur_y = mot_dy; w32_set_cursor(mot_dx, mot_dy);
     post(0x200, 0, ((uint32_t)mot_dy << 16) | ((uint32_t)mot_dx & 0xffff));
 }
@@ -349,8 +354,14 @@ static void capture(int on)
 static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t style)
 {
     (void)x; (void)y; (void)w; (void)h; (void)style;
+#ifdef DF_EDITION
+    if (style & 0x40000000u) return;                                  // child windows: none of ours
+    { int first = !game_hwnd; game_hwnd = hwnd; if (!first) return; } // Delta Force 2 makes a new main window when it changes
+                                                                      // driver: input follows it, the Mac window stays
+#else
     if (game_hwnd) return;                                            // the game has one top-level window
     game_hwnd = hwnd;
+#endif
     dispatch_async(dispatch_get_main_queue(), ^{
         NSRect f = NSScreen.mainScreen.frame;
         NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
@@ -358,7 +369,7 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         win = [[GameWindow alloc] initWithContentRect:f styleMask:sm backing:NSBackingStoreBuffered defer:NO];
         win.releasedWhenClosed = NO;   /* ARC owns it (AppKit's default releases a closed window once more) */
         f.origin = NSZeroPoint;
-        win.title = @"Dungeon Siege"; win.backgroundColor = NSColor.blackColor; win.acceptsMouseMovedEvents = YES;
+        win.title = @DS2_TITLE; win.backgroundColor = NSColor.blackColor; win.acceptsMouseMovedEvents = YES;
         GameView *v = [[GameView alloc] initWithFrame:f]; v.wantsLayer = YES;
         win.contentView = v; [win makeFirstResponder:v];
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
@@ -514,7 +525,11 @@ int main(int argc, char **argv)
         init_keymap();
         {   /* the launch window (resolution, frame rate, updates) unless in test mode */
             int ds_launcher_run(const char *game_dir, const char *data_dir);
+#ifdef DF_EDITION
+            if (0) {                                                  // Delta Force: its own settings screen (renderer, resolution) is the launcher
+#else
             if (!getenv("DS_TEST") || getenv("DS_LAUNCHER_SHOT")) {
+#endif
                 [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
                 if (!ds_launcher_run(game, data)) return 0;
             }
@@ -522,7 +537,9 @@ int main(int argc, char **argv)
         w32_crash_init(data, DS_BUILD); w32_crash_thread("macOS UI thread");
         { void w32_registry_install(const char *); w32_registry_install(data); }   /* values the game's installer would have written */
         NSSetUncaughtExceptionHandler(on_objc_exception);
-        ensure_resolution(drive_c);
+#ifndef DF_EDITION
+        ensure_resolution(drive_c);                                   // DungeonSiege2.ini
+#endif
         test_mode = getenv("DS_TEST") && atoi(getenv("DS_TEST"));
         if (test_mode) parse_script();
 

@@ -1,15 +1,16 @@
-# Recompiler: Dungeon Siege II as native code
+# Recompiler: Delta Force and Delta Force 2 as native code
 
-Static recompilation of the user's own GOG 2.3 `DungeonSiege2.exe` (and the Miles and Bink DLLs in its folder) into
-C, compiled for Apple Silicon or Linux x86-64. Linux build status and instructions are in the
-[root README](../README.md); the tables and shader notes below describe the upstream Mac implementation. Nothing derived from the game is committed: `build.sh` regenerates everything locally
-from the user's files. Installing and playing: [README](../README.md); plan and open work: [docs/PLAN.md](../docs/PLAN.md).
+Static recompilation of the user's own Steam `Df.exe` / `Df2.exe` (and the NovaLogic DLLs in the game folder) into C,
+compiled for Apple Silicon or Linux x86-64. Nothing derived from the games is committed: `build_df.sh` regenerates
+everything locally from the user's files. Installing and playing: [README](../README.md); what was specific to these
+games and the Mac handoff: [docs/DF-PORT.md](../docs/DF-PORT.md).
 
 ```sh
-recomp/build.sh "/path/to/Dungeon Siege 2/DungeonSiege2.exe"   # -> recomp/work/full/libgame.dylib (about 10 minutes)
-recomp/tools/build_app.sh recomp/work/full
-recomp/run.sh "/path/to/Dungeon Siege 2"
+recomp/build_df.sh "/path/to/Delta Force 2"      # -> recomp/work/df2 (a minute or two)
 ```
+
+The sections below describe the recompiler as inherited from the Dungeon Siege II port (its execution model, flags,
+x87, indirect calls and test harnesses apply unchanged); the numbers in them are Dungeon Siege II's.
 
 ## Status
 

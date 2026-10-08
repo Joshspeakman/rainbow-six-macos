@@ -63,7 +63,8 @@ void rt_hook(Ctx *c, uint32_t addr)
             if (e && strtoul(e, 0, 16) == addr) {
                 const char *k = strchr(e, ':'); long want = k ? atol(k + 1) : 1;   /* :0 = every call (up to 64), file.<n> */
                 const char *file = getenv("W32_SNAP_FILE") ? getenv("W32_SNAP_FILE") : "snapshot.bin";
-                void vm_snapshot(const char *, const Ctx *);
+                extern void vm_snapshot(const char *, const Ctx *) __attribute__((weak));   /* vm.c (absent in unit tests) */
+                if (!vm_snapshot) return;
                 if (++calls == want) vm_snapshot(file, c);
                 else if (!want && calls <= 64) { char p[1100]; snprintf(p, sizeof p, "%s.%ld", file, calls); vm_snapshot(p, c); }
             }
