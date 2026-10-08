@@ -452,7 +452,7 @@ uint32_t w32_window_tid(uint32_t hwnd);
 IMPL(user32, SetCursorPos)
 {
     pthread_mutex_lock(&cursor_lock);
-    int dx=0,dy=0;
+    int dx=0,dy=0, was_x=cursor_x, was_y=cursor_y;
     if(cursor_relative && cursor_read.valid && cursor_read.epoch==cursor_epoch) { dx=cursor_x-cursor_read.x; dy=cursor_y-cursor_read.y; }
     cursor_x=(int)ARG(0)+dx; cursor_y=(int)ARG(1)+dy; cursor_read.valid=0; cursor_epoch++;
     { static int lg = -1; if (lg < 0) lg = getenv("DF_MOUSELOG") != 0; if (lg) fprintf(stderr, "mouse: SetCursorPos %d,%d\n", (int)ARG(0), (int)ARG(1)); }
@@ -461,8 +461,7 @@ IMPL(user32, SetCursorPos)
 #ifdef DF_EDITION
     /* Windows sends the window a WM_MOUSEMOVE for the new position; Delta Force measures mouse-look from one
      * WM_MOUSEMOVE to the next and re-centres the cursor every frame, so it needs that message too */
-    { static int lx = -1, ly = -1;
-      if ((int)ARG(0) != lx || (int)ARG(1) != ly) { lx = (int)ARG(0); ly = (int)ARG(1);
+    { if ((int)ARG(0) != was_x || (int)ARG(1) != was_y) {      /* the cursor moved: Windows posts the new position */
           uint32_t h = focus_hwnd ? focus_hwnd : active_hwnd; extern uint8_t w32_keys[256];
           if (h) w32_post(w32_window_tid(h), h, 0x200, (w32_keys[1] & 0x80 ? 1 : 0) | (w32_keys[2] & 0x80 ? 2 : 0),
                           ((uint32_t)ARG(1) << 16) | (ARG(0) & 0xffff)); } }
