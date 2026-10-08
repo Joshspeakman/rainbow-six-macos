@@ -29,11 +29,14 @@ echo "== analysis"
 sed -n '/^functions /p; /^decode failures:/p; /^jump tables /p; /^SEH:/p' "$OUT/analysis.log"
 echo "== lifting"
 "$PY" "$HERE/tools/lift.py" "$EXE" "$OUT/analysis.json" "$OUT" --game "$G" | grep -Ev '^unsupported: \{\}$'
-# the game's own DLLs, loaded by name: both want 0x10000000, so Cmprssh0 is lifted from a copy relocated to 0x11000000
-# (tools/rebase_pe.py); loader.c applies the same relocations to the original at run time.
+# the game's own DLLs, loaded by name: all want 0x10000000, so Cmprssh0 and Hw_d3d are lifted from copies relocated to
+# 0x11000000 and 0x12000000
+# (tools/rebase_pe.py); loader.c applies the same relocations to the originals at run time.
 NIMP=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["imports"]))' "$OUT/image.json")
 IMGS=("=")
-for spec in Netsock.dll Cmprssh0.dll@0x11000000; do
+DLLS="Netsock.dll Cmprssh0.dll@0x11000000"
+[ "$G" = df2 ] && DLLS="$DLLS Hw_d3d.dll@0x12000000"   # DF2's Direct3D renderer (DirectX 6), loaded when the hardware driver is chosen
+for spec in $DLLS; do
   rel=${spec%@*}; tag=$(echo "$rel" | tr . _ | tr A-Z a-z); src="$GAME/$rel"
   [ -f "$src" ] || { echo "missing $src"; exit 1; }
   if [[ $spec == *@* ]]; then "$PY" "$HERE/tools/rebase_pe.py" "$src" "$OUT/$rel" "${spec#*@}"; src="$OUT/$rel"; fi

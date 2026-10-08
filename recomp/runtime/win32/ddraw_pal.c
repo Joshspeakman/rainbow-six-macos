@@ -913,7 +913,15 @@ M(d3_EnumZBufferFormats, 4)                                              /* (dev
     heap_free(w32_process_heap, pf); RET(DD_OK, 4);
 END
 OK_M(d3_EvictManagedTextures, 1)
-NOT_M(d3_CreateLight, 3) NOT_M(d3_CreateMaterial, 3) NOT_M(d3_FindDevice, 3)
+NOT_M(d3_CreateLight, 3) NOT_M(d3_CreateMaterial, 3)
+M(d3_FindDevice, 3)                                                     /* (D3DFINDDEVICESEARCH *, D3DFINDDEVICERESULT *): the HAL device */
+    uint32_t r = ARG(2), size = rt_r32(G_MEM, r), desc = size > 20 ? (size - 20) / 2 : 0;   /* dwSize, GUID, hardware desc, software desc */
+    if (desc < 172 || desc > 252) desc = 252;
+    memcpy(GP(r + 4), HAL_GUID, 16);
+    rt_w32(G_MEM, r + 20, desc); fill_caps(r + 20);
+    memset(GP(r + 20 + desc), 0, desc); rt_w32(G_MEM, r + 20 + desc, desc);
+    dlog("FindDevice: the HAL (descriptions %u bytes)", desc); RET(DD_OK, 3);
+END
 M(d3_CreateVertexBuffer, 5)                                              /* (D3DVERTEXBUFFERDESC, out, flags, outer) */
     uint32_t d = ARG(1); PVB *v = calloc(1, sizeof *v); v->ref = 1;
     v->fvf = legacy_fvf(rt_r32(G_MEM, d + 8)); v->n = rt_r32(G_MEM, d + 12); v->stride = fvf_stride(v->fvf);
