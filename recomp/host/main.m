@@ -546,7 +546,7 @@ int main(int argc, char **argv)
         [NSApplication sharedApplication]; [NSApp setActivationPolicy:test_mode ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular];
         AppDelegate *del = [AppDelegate new]; NSApp.delegate = del;
         NSMenu *bar = [NSMenu new], *appm = [NSMenu new]; NSMenuItem *it = [NSMenuItem new]; it.submenu = appm; [bar addItem:it];
-        [appm addItemWithTitle:@"Quit Dungeon Siege II" action:@selector(terminate:) keyEquivalent:@"q"]; NSApp.mainMenu = bar;
+        [appm addItemWithTitle:@"Quit " DS2_TITLE action:@selector(terminate:) keyEquivalent:@"q"]; NSApp.mainMenu = bar;
 
         layer = [CAMetalLayer layer]; layer.device = MTLCreateSystemDefaultDevice(); layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         layer.framebufferOnly = YES; layer.opaque = YES; layer.contentsGravity = kCAGravityResizeAspect; layer.maximumDrawableCount = 3;

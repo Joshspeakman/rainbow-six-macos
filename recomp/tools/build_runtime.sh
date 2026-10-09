@@ -3,7 +3,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; OUT="$1"; mkdir -p "$OUT/obj/rt"
 if [[ $(uname -s) == Linux ]]; then exec "$HERE/tools/build_linux.sh" "$OUT"; fi
-# macOS (untested for Delta Force so far): the same edition flags and include paths as tools/build_linux.sh
+# macOS: the same edition flags and include paths as tools/build_linux.sh
 EDITION_FLAGS=()
 [[ -f "$OUT/Df.exe" ]] && EDITION_FLAGS=(-DDF_EDITION -DDF1_EDITION)
 [[ -f "$OUT/Df2.exe" ]] && EDITION_FLAGS=(-DDF_EDITION -DDF2_EDITION)
