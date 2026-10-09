@@ -177,7 +177,6 @@ IMPL(winmm, auxGetNumDevs) { RET(0, 0); }
 IMPL(winmm, auxGetDevCapsA) { RET(2, 3); }
 IMPL(winmm, auxGetVolume) { RET(2, 2); }
 IMPL(winmm, auxSetVolume) { RET(2, 2); }
-IMPL(winmm, mciSendCommandA) { RET(257, 4); }
 IMPL(winmm, midiOutOpen) { RET(6, 5); }
 IMPL(winmm, midiOutClose) { RET(5, 1); }
 IMPL(winmm, midiOutLongMsg) { RET(5, 3); }
