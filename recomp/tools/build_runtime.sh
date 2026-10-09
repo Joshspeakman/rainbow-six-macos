@@ -7,6 +7,7 @@ if [[ $(uname -s) == Linux ]]; then exec "$HERE/tools/build_linux.sh" "$OUT"; fi
 EDITION_FLAGS=()
 [[ -f "$OUT/Df.exe" ]] && EDITION_FLAGS=(-DDF_EDITION -DDF1_EDITION)
 [[ -f "$OUT/Df2.exe" ]] && EDITION_FLAGS=(-DDF_EDITION -DDF2_EDITION)
+[[ -f "$OUT/RainbowSix.exe" ]] && EDITION_FLAGS=(-DDF_EDITION -DR6_EDITION)
 INC=(-I "$HERE/runtime" -I "$HERE/runtime/win32" -I "$HERE/third_party/mojoshader" -I "$HERE/third_party/minimp3" -I "$HERE/third_party/vulkan/include")
 python3 "$HERE/tools/gen_imptab.py" "$OUT/imptab.c" "$HERE"/runtime/win32/*.c
 # MojoShader (d3d9_shader.c): as on Linux, the GLSL profile only (the Delta Force games never use Direct3D 9 shaders)

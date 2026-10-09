@@ -8,6 +8,7 @@ if [[ $(uname -s) == Linux ]]; then exec "$HERE/tools/build_linux.sh" "$OUT"; fi
 NAME=DungeonSiegeNative; EDITION_FLAGS=()
 [[ -f "$OUT/Df.exe" ]] && { NAME=DeltaForce; EDITION_FLAGS=(-DDF_EDITION -DDF1_EDITION); }
 [[ -f "$OUT/Df2.exe" ]] && { NAME=DeltaForce2; EDITION_FLAGS=(-DDF_EDITION -DDF2_EDITION); }
+[[ -f "$OUT/RainbowSix.exe" ]] && { NAME=RainbowSix; EDITION_FLAGS=(-DDF_EDITION -DR6_EDITION); }
 mkdir -p "$APP" "$OUT/obj/host"
 BUILD="$(git -C "$HERE" describe --always --dirty 2>/dev/null || echo unknown)"
 clang -c -O2 -fobjc-arc -Wall -Wno-unused-function "${EDITION_FLAGS[@]}" -I "$HERE/runtime" -DDS_BUILD="\"$BUILD\"" -o "$OUT/obj/host/main.o" "$HERE/host/main.m"

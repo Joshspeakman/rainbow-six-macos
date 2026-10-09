@@ -7,8 +7,9 @@ sys.path.insert(0, os.path.dirname(__file__)); from pe import PE, code_range
 pe = PE(sys.argv[1]); TLO, THI, code = code_range(pe)
 relocated = pe.section('.rld')
 code_sections = [s for s in pe.sections if s[5] & 0x20000000]
+multi = len([s for s in code_sections if s[0] != '.bind']) > 1   # code spread over several sections (DF2, a patched exe)
 def is_code(va):
-    return TLO <= va < THI and (not relocated or any(s[1] <= va < s[1] + s[2] for s in code_sections))
+    return TLO <= va < THI and (not (relocated or multi) or any(s[1] <= va < s[1] + s[2] for s in code_sections))
 md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32); md.detail = True
 cache = {}
 def ins_at(va):
@@ -43,6 +44,18 @@ if _erva:
     for _k in range(pe.u32(_ed + 20)):
         _v = pe.u32(pe.base + pe.u32(_ed + 28) + 4 * _k)
         if _v and TLO <= pe.base + _v < THI: seeds.setdefault(pe.base + _v, 'export')
+# extra executable sections of a patched executable (Rainbow Six with a mod: a new section after .rsrc, reached by
+# jmp/call hooks written into .text): their first byte starts a function. Direct calls into them are seeds like any
+# call, direct jumps into them are followed as part of the hooked function; pointer tables inside them are scanned
+# below. R6_SEEDS=<file> (hex addresses, one per line) adds entry points the mod reaches only indirectly.
+if multi and not relocated and pe.section('.text'):
+    for name, sva, vs, ra, rs, fl in code_sections:
+        if name not in ('.text', '.bind', '_text', '_TEXT') and not name.startswith('AUTO') and ins_at(sva) is not None:
+            seeds.setdefault(sva, 'section')
+if os.environ.get('R6_SEEDS') and os.path.exists(os.environ['R6_SEEDS']):
+    for line in open(os.environ['R6_SEEDS']):
+        line = line.split('#')[0].strip()
+        if line: seeds.setdefault(int(line, 16), 'listed')
 OBS = os.path.join(os.path.dirname(os.path.abspath(sys.argv[2])), 'observed_targets.json')
 if os.path.exists(OBS):                      # indirect-branch targets observed at run time (tests/startup.py DISCOVER=)
     for v in json.load(open(OBS)): seeds.setdefault(v, 'observed')

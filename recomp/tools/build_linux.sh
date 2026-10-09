@@ -12,6 +12,7 @@ EXE=$OUT/DungeonSiege2.exe; APP=DungeonSiege2Linux
 [[ -f "$OUT/Sims.exe" ]] && { EXE=$OUT/Sims.exe; APP=SimsLinux; }
 [[ -f "$OUT/Df.exe" ]] && { EXE=$OUT/Df.exe; APP=DeltaForceLinux; }
 [[ -f "$OUT/Df2.exe" ]] && { EXE=$OUT/Df2.exe; APP=DeltaForce2Linux; }
+[[ -f "$OUT/RainbowSix.exe" ]] && { EXE=$OUT/RainbowSix.exe; APP=RainbowSixLinux; }
 EDITION=$(PYTHONPATH="$HERE/tools" python3 -c 'import sys; from editions import identify; print(identify(sys.argv[1], prepared=True))' "$EXE")
 EDITION_FLAGS=()
 [[ "$EDITION" == broken-world ]] && EDITION_FLAGS=(-DDS2_BROKEN_WORLD)
@@ -19,6 +20,7 @@ EDITION_FLAGS=()
 [[ "$EDITION" == sims ]] && EDITION_FLAGS=(-DSIMS_EDITION)
 [[ "$EDITION" == df1 ]] && EDITION_FLAGS=(-DDF_EDITION -DDF1_EDITION)
 [[ "$EDITION" == df2 ]] && EDITION_FLAGS=(-DDF_EDITION -DDF2_EDITION)
+[[ "$EDITION" == r6 ]] && EDITION_FLAGS=(-DDF_EDITION -DR6_EDITION)
 DEPS=(sdl2 freetype2 fontconfig sndfile glew libpng)
 pkg-config --exists "${DEPS[@]}"
 read -ra CFLAGS <<< "$(pkg-config --cflags "${DEPS[@]}")"
