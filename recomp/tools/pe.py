@@ -13,6 +13,8 @@ class PE:
             flags = struct.unpack_from('<I', d, so + 40 * i + 36)[0]
             if not ra: rs = 0                    # Watcom: .bss has a raw size but no file data
             vs = vs or rs                        # Watcom leaves VirtualSize 0
+            if flags & 0x20000000 and rs > vs:   # code in the slack after VirtualSize (GOG's Rainbow Six fix jumps there):
+                vs = min(rs, (vs + 0xfff) & ~0xfff)   # Windows maps the file's bytes up to the page-rounded size
             self.sections.append((name.rstrip(b'\0').decode(), self.base + va, vs, ra, rs, flags))
         self.dirs = [struct.unpack_from('<II', d, opt + 96 + 8 * k) for k in range(16)]
         self.imports = {}
