@@ -767,7 +767,7 @@ uint32_t fvf_stride(uint32_t fvf);                                       /* ddra
 extern uint32_t dsr_d3d9_w, dsr_d3d9_h;
 typedef struct PVp { int ref; uint32_t g; uint32_t data[11]; int set; uint32_t bg; } PVp;   /* D3DVIEWPORT2; bg: background material handle (DirectX 5) */
 typedef struct PDev {
-    int ref; uint32_t g; PDraw *dd; PSurf *rt; PVp *vp; PVp *vps[8]; int nvp; int v2;   /* v2: an IDirect3DDevice2 */
+    int ref; uint32_t g; PDraw *dd; PSurf *rt; PVp *vp; PVp *vps[64]; int nvp; int v2;   /* v2: an IDirect3DDevice2 */
     uint32_t rs[256], tss[8][32]; PSurf *tex[8];
     uint32_t bound_rt, bound_z, bound_tex[8];                             /* what the renderer has */
 } PDev;
@@ -973,7 +973,9 @@ M(dv_GetCaps, 3) if (ARG(1)) fill_caps(ARG(1)); if (ARG(2)) { uint32_t sz = rt_r
 M(dv_GetStats, 2) uint32_t sz = rt_r32(G_MEM, ARG(1)); if (sz >= 4 && sz <= 64) memset(GP(ARG(1) + 4), 0, sz - 4); RET(DD_OK, 2); END
 M(dv_AddViewport, 2) ME(PDev, T_DEV)
     PVp *v = the(ARG(1), T_VP); if (!v) RET(DDERR_INVALIDPARAMS, 2);
-    if (me->nvp < 8) me->vps[me->nvp++] = v; v->ref++; RET(DD_OK, 2);
+    for (int k = 0; k < me->nvp; k++) if (me->vps[k] == v) RET(DD_OK, 2);           /* already added */
+    if (me->nvp < 64) me->vps[me->nvp++] = v; else dlog("AddViewport: more than 64 viewports on one device");
+    v->ref++; RET(DD_OK, 2);
 END
 M(dv_DeleteViewport, 2) ME(PDev, T_DEV)
     PVp *v = the(ARG(1), T_VP);
@@ -1070,7 +1072,16 @@ M(vp_QueryInterface, 3) ME(PVp, T_VP) rt_w32(G_MEM, ARG(2), me->g); me->ref++; R
 M(vp_AddRef, 1) ME(PVp, T_VP) RET((uint32_t)++me->ref, 1); END
 M(vp_Release, 1) ME(PVp, T_VP) RET((uint32_t)(me->ref > 0 ? --me->ref : 0), 1); END
 OK_M(vp_Initialize, 2)
-static PDev *dev_of_vp(PVp *v) { for (uint32_t k = 1; k < nobjs; k++) if (objs[k].type == T_DEV) { PDev *d = objs[k].p; for (int j = 0; j < d->nvp; j++) if (d->vps[j] == v) return d; } return 0; }
+/* the device a viewport was added to, or the one it is current on. Rainbow Six adds a viewport per screen it opens, and
+ * its 3D view clears colour and depth through one every frame: with only 8 remembered, the mission's viewport was not
+ * found, its clears were dropped, and stale depth hid whatever lay behind nearer surfaces of earlier frames (the M01
+ * fire escape showed sky over the railings' bars) */
+static PDev *dev_of_vp(PVp *v)
+{
+    for (uint32_t k = 1; k < nobjs; k++) if (objs[k].type == T_DEV) { PDev *d = objs[k].p; for (int j = 0; j < d->nvp; j++) if (d->vps[j] == v) return d; }
+    for (uint32_t k = 1; k < nobjs; k++) if (objs[k].type == T_DEV) { PDev *d = objs[k].p; if (d->vp == v) return d; }
+    return 0;
+}
 M(vp_SetViewport2, 2) ME(PVp, T_VP)                                      /* D3DVIEWPORT2 (or D3DVIEWPORT: the same x, y, w, h, z range) */
     for (int k = 0; k < 11; k++) me->data[k] = rt_r32(G_MEM, ARG(1) + 4 * (uint32_t)k);
     { static int n; if (n++ < 8) { float f[6]; memcpy(f, me->data + 5, 24); dlog("SetViewport%s %u,%u %ux%u | %g %g %g %g | z %g..%g", rt_r32(G_MEM, ARG(0)) == vt_vp ? "" : "?", me->data[1], me->data[2], me->data[3], me->data[4], f[0], f[1], f[2], f[3], f[4], f[5]); } }
