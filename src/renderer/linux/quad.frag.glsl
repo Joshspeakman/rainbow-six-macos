@@ -20,6 +20,7 @@ vec3 fxaa_rgb(vec2 p) {
 }
 void main() {
  vec4 c=mode==1 ? color : texture(image,uv);
+ if(mode==3 && c.a<0.5) discard;                                  /* a colour-keyed copy */
  if(present!=0 && fxaa!=0) c.rgb=fxaa_rgb(uv);
  if(present!=0) { ivec3 i=ivec3(clamp(c.rgb,0.0,1.0)*255.0+0.5); c=vec4(texelFetch(gammaRamp,i.r,0).r,texelFetch(gammaRamp,i.g,0).g,texelFetch(gammaRamp,i.b,0).b,1.0); }
  fragColor=c;

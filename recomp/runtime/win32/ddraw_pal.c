@@ -60,7 +60,7 @@ static void dlog(const char *fmt, ...)
 typedef struct PSurf PSurf;
 typedef struct PPal { int ref; uint32_t g; uint32_t entries[256]; uint32_t caps; } PPal;     /* entries: PALETTEENTRY r, g, b, flags */
 typedef struct PClip { int ref; uint32_t g, hwnd; } PClip;
-typedef struct PDraw { int ref; uint32_t g[4]; uint32_t hwnd, coop, mode_w, mode_h, mode_bpp; PSurf *primary; int d3d; uint32_t g_d3d; } PDraw;   /* d3d: asked for IDirect3D3 */
+typedef struct PDraw { int ref; uint32_t g[4]; uint32_t hwnd, coop, mode_w, mode_h, mode_bpp; PSurf *primary; int d3d; uint32_t g_d3d, g_d3d2; } PDraw;   /* d3d: asked for IDirect3D3 (or IDirect3D2: DirectX 5) */
 struct PSurf {
     int ref; uint32_t g[4], g_gamma; PDraw *dd;
     uint32_t w, h, bpp, caps, pitch, mem;            /* mem: guest pixels */
@@ -74,13 +74,13 @@ struct PSurf {
     int gpu_newer;                                   /* drawn into on the GPU since the CPU copy was last read back */
     PSurf *zbuf;                                     /* an attached depth buffer */
 };
-enum { T_DD = 1, T_SURF, T_PAL, T_CLIP, T_GAMMA, T_D3D, T_DEV, T_VP, T_TEX, T_VB };
+enum { T_DD = 1, T_SURF, T_PAL, T_CLIP, T_GAMMA, T_D3D, T_DEV, T_VP, T_TEX, T_VB, T_MAT, T_LIGHT };
 typedef struct { int type; void *p; } Obj;
 #define MAXO 65536
 static Obj objs[MAXO]; static uint32_t nobjs = 1;
 static uint32_t free_obj[MAXO], nfree_obj;           /* released slots, reused once all have been handed out */
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t vt_dd[4], vt_surf[4], vt_pal, vt_clip, vt_gamma, vt_d3d, vt_dev, vt_vp, vt_tex, vt_vb;   /* [version index]: 0 v1, 1 v2, 2 v4, 3 v7 (surfaces: v1/v2+v3, v4, v7 share a layout) */
+static uint32_t vt_dd[4], vt_surf[4], vt_pal, vt_clip, vt_gamma, vt_d3d, vt_dev, vt_vp, vt_tex, vt_vb, vt_d3d2, vt_dev2, vt_mat, vt_light;   /* [version index]: 0 v1, 1 v2, 2 v4, 3 v7 (surfaces: v1/v2+v3, v4, v7 share a layout) */
 
 static uint32_t iface(uint32_t vtable, int type, void *p)
 {
@@ -209,9 +209,8 @@ static void gpu_attach(PSurf *s, int kind)
 {
     if (s->gid) return;
     s->gid = next_object_id(); s->gkind = kind;
-    int alpha = (s->pf[1] & 1) != 0 || s->has_ck || s->bpp == 8;            /* DDPF_ALPHAPIXELS, a colour key, a palette */
     uint32_t *p = cmd_begin(DSR_SURFACE_CREATE, 40); memset(p, 0, 40);
-    p[0] = s->gid; p[1] = s->w; p[2] = s->h; p[3] = (uint32_t)kind; p[4] = kind == 2 ? 3 : kind == 3 && alpha ? 1 : 2; p[7] = 1;
+    p[0] = s->gid; p[1] = s->w; p[2] = s->h; p[3] = (uint32_t)kind; p[4] = kind == 2 ? 3 : (kind == 3 || kind == 4) ? 1 : 2; p[7] = 1;   /* textures and copy sources keep alpha: a colour key may come later */
     cmd_end();
     dlog("surface %ux%ux%u caps %x on the GPU as %u (kind %d)", s->w, s->h, s->bpp, s->caps, s->gid, kind);
 }
@@ -460,6 +459,12 @@ M(s_BltFast, 6) ME(PSurf, T_SURF)                                   /* (x, y, sr
     int32_t sr[4]; rect_in(ARG(4), src, sr);
     int32_t x = (int32_t)ARG(1), y = (int32_t)ARG(2);
     int32_t dr[4] = {x, y, x + sr[2] - sr[0], y + sr[3] - sr[1]}, ox = sr[0] - dr[0], oy = sr[1] - dr[1];
+    if (me->gid && me->gkind == 1) {                                  /* onto a render target (Rainbow Six's cursor and menus): on the GPU, as Blt */
+        if (!src->gid) { gpu_attach(src, 4); gpu_upload(src); } else gpu_readback(src), gpu_upload(src);
+        uint32_t *p = cmd_begin(DSR_BLT, 48); p[0] = me->gid; memcpy(p + 1, dr, 16); p[5] = src->gid; memcpy(p + 6, sr, 16);
+        p[10] = (ARG(5) & DDBLTFAST_SRCCOLORKEY) && src->has_ck ? DDBLT_KEYSRC : 0; p[11] = 0; cmd_end();
+        me->gpu_newer = 1; RET(DD_OK, 6);
+    }
     if (!clip_to(dr, me)) RET(DD_OK, 6);
     sr[0] = dr[0] + ox; sr[1] = dr[1] + oy; sr[2] = dr[2] + ox; sr[3] = dr[3] + oy;
     if (!clip_to(sr, src)) RET(DD_OK, 6);
@@ -622,6 +627,7 @@ M(dd_QueryInterface, 3) ME(PDraw, T_DD)
     dlog("IDirectDraw QI %08x -> %s", iid, v >= 0 || iid == 0 ? "ok" : "no");
     if (v >= 0 || iid == 0) { rt_w32(G_MEM, out, me->g[v < 0 ? 0 : v]); me->ref++; RET(DD_OK, 3); }
     if (iid == 0xbb223240u) { me->d3d = 1; if (!me->g_d3d) me->g_d3d = iface(vt_d3d, T_D3D, me); rt_w32(G_MEM, out, me->g_d3d); me->ref++; RET(DD_OK, 3); }   /* IDirect3D3 */
+    if (iid == 0x6aae1ec1u) { me->d3d = 1; if (!me->g_d3d2) me->g_d3d2 = iface(vt_d3d2, T_D3D, me); rt_w32(G_MEM, out, me->g_d3d2); me->ref++; RET(DD_OK, 3); }  /* IDirect3D2 (DirectX 5: Rainbow Six) */
     rt_w32(G_MEM, out, 0); RET(E_NOINTERFACE, 3);
 END
 M(dd_AddRef, 1) ME(PDraw, T_DD) RET((uint32_t)++me->ref, 1); END
@@ -750,9 +756,9 @@ NOT_M(dd_StartModeTest, 4) NOT_M(dd_EvaluateMode, 3)
  * become texture-stage states. ---- */
 uint32_t fvf_stride(uint32_t fvf);                                       /* ddraw.c */
 extern uint32_t dsr_d3d9_w, dsr_d3d9_h;
-typedef struct PVp { int ref; uint32_t g; uint32_t data[11]; int set; } PVp;   /* D3DVIEWPORT2 */
+typedef struct PVp { int ref; uint32_t g; uint32_t data[11]; int set; uint32_t bg; } PVp;   /* D3DVIEWPORT2; bg: background material handle (DirectX 5) */
 typedef struct PDev {
-    int ref; uint32_t g; PDraw *dd; PSurf *rt; PVp *vp; PVp *vps[8]; int nvp;
+    int ref; uint32_t g; PDraw *dd; PSurf *rt; PVp *vp; PVp *vps[8]; int nvp; int v2;   /* v2: an IDirect3DDevice2 */
     uint32_t rs[256], tss[8][32]; PSurf *tex[8];
     uint32_t bound_rt, bound_z, bound_tex[8];                             /* what the renderer has */
 } PDev;
@@ -883,7 +889,8 @@ OK_M(vb_Optimize, 3) NOT_M(vb_ProcessVertices, 8)
 /* IDirect3D3 */
 M(d3_QueryInterface, 3) ME(PDraw, T_D3D)
     uint32_t iid = rt_r32(G_MEM, ARG(1)), out = ARG(2); int v = vidx_of_dd_iid(iid);
-    if (iid == 0xbb223240u) { rt_w32(G_MEM, out, me->g_d3d); me->ref++; RET(DD_OK, 3); }
+    if (iid == 0xbb223240u) { if (!me->g_d3d) me->g_d3d = iface(vt_d3d, T_D3D, me); rt_w32(G_MEM, out, me->g_d3d); me->ref++; RET(DD_OK, 3); }
+    if (iid == 0x6aae1ec1u) { if (!me->g_d3d2) me->g_d3d2 = iface(vt_d3d2, T_D3D, me); rt_w32(G_MEM, out, me->g_d3d2); me->ref++; RET(DD_OK, 3); }
     if (v >= 0) { rt_w32(G_MEM, out, me->g[v]); me->ref++; RET(DD_OK, 3); }
     dlog("IDirect3D3 QI %08x: no", iid); rt_w32(G_MEM, out, 0); RET(E_NOINTERFACE, 3);
 END
@@ -942,7 +949,7 @@ END
 /* IDirect3DDevice3 */
 M(dv_QueryInterface, 3) ME(PDev, T_DEV)
     uint32_t iid = rt_r32(G_MEM, ARG(1));
-    if (iid == 0xb0ab3b60u || iid == 0) { rt_w32(G_MEM, ARG(2), me->g); me->ref++; RET(DD_OK, 3); }
+    if (iid == 0xb0ab3b60u || iid == 0x93281501u || iid == 0) { rt_w32(G_MEM, ARG(2), me->g); me->ref++; RET(DD_OK, 3); }
     dlog("IDirect3DDevice3 QI %08x: no", iid); rt_w32(G_MEM, ARG(2), 0); RET(E_NOINTERFACE, 3);
 END
 M(dv_AddRef, 1) ME(PDev, T_DEV) RET((uint32_t)++me->ref, 1); END
@@ -974,7 +981,7 @@ M(dv_EnumTextureFormats, 3)                                              /* (cal
     heap_free(w32_process_heap, pf); RET(DD_OK, 3);
 END
 OK_M(dv_BeginScene, 1) OK_M(dv_EndScene, 1)
-M(dv_GetDirect3D, 2) ME(PDev, T_DEV) rt_w32(G_MEM, ARG(1), me->dd->g_d3d); me->dd->ref++; RET(DD_OK, 2); END
+M(dv_GetDirect3D, 2) ME(PDev, T_DEV) rt_w32(G_MEM, ARG(1), me->v2 ? me->dd->g_d3d2 : me->dd->g_d3d); me->dd->ref++; RET(DD_OK, 2); END
 M(dv_SetCurrentViewport, 2) ME(PDev, T_DEV) me->vp = the(ARG(1), T_VP); dev_viewport(me); RET(DD_OK, 2); END
 M(dv_GetCurrentViewport, 2) ME(PDev, T_DEV) if (!me->vp) RET(DDERR_INVALIDPARAMS, 2); rt_w32(G_MEM, ARG(1), me->vp->g); me->vp->ref++; RET(DD_OK, 2); END
 M(dv_SetRenderTarget, 3) ME(PDev, T_DEV)
@@ -1052,10 +1059,11 @@ static void vp_clear(PVp *v, uint32_t n, uint32_t rects, uint32_t flags, uint32_
     p[0] = flags; p[1] = color; p[2] = z; p[3] = 0; p[4] = n; if (n) memcpy(p + 5, G_MEM + rects, 16 * n);
     cmd_end(); d->rt->gpu_newer = 1;
 }
-M(vp_Clear, 4) ME(PVp, T_VP) vp_clear(me, ARG(1), ARG(2), ARG(3), 0xff000000u, 0x3f800000u); RET(DD_OK, 4); END
+static uint32_t mat_color(uint32_t handle);
+M(vp_Clear, 4) ME(PVp, T_VP) vp_clear(me, ARG(1), ARG(2), ARG(3), mat_color(me->bg), 0x3f800000u); RET(DD_OK, 4); END
 M(vp_Clear2, 7) ME(PVp, T_VP) vp_clear(me, ARG(1), ARG(2), ARG(3), ARG(4), ARG(5)); RET(DD_OK, 7); END
-OK_M(vp_SetBackground, 2) OK_M(vp_SetBackgroundDepth, 2) OK_M(vp_SetBackgroundDepth2, 2)
-NOT_M(vp_TransformVertices, 5) NOT_M(vp_LightElements, 3) NOT_M(vp_GetBackground, 3) NOT_M(vp_GetBackgroundDepth, 3)
+M(vp_SetBackground, 2) ME(PVp, T_VP) me->bg = ARG(1); RET(DD_OK, 2); END OK_M(vp_SetBackgroundDepth, 2) OK_M(vp_SetBackgroundDepth2, 2)
+NOT_M(vp_TransformVertices, 5) NOT_M(vp_LightElements, 3) M(vp_GetBackground, 3) ME(PVp, T_VP) rt_w32(G_MEM, ARG(1), me->bg); if (ARG(2)) rt_w32(G_MEM, ARG(2), me->bg != 0); RET(DD_OK, 3); END NOT_M(vp_GetBackgroundDepth, 3)
 NOT_M(vp_AddLight, 2) NOT_M(vp_DeleteLight, 2) NOT_M(vp_NextLight, 4) NOT_M(vp_GetBackgroundDepth2, 3)
 /* IDirect3DTexture2: the texture surface's other face */
 M(tx_QueryInterface, 3) ME(PSurf, T_TEX)
@@ -1076,6 +1084,86 @@ M(tx_Load, 2) ME(PSurf, T_TEX)                                           /* (sou
     if (src->has_ck) { me->has_ck = 1; me->ck_lo = src->ck_lo; me->ck_hi = src->ck_hi; }
     gpu_upload(me); RET(DD_OK, 2);
 END
+
+/* ---- Direct3D 2 (DirectX 5), as Rainbow Six uses it: IDirect3D2, IDirect3DDevice2 (DrawPrimitive with D3DVT_
+ * vertex types, textures by handle), materials (a viewport's background colour) and lights (accepted, unused: the
+ * game draws pre-lit vertices). The device, viewport and texture objects are the DirectX 6 ones above. ---- */
+typedef struct PMat { int ref; uint32_t g; uint32_t data[20]; } PMat;    /* D3DMATERIAL (80 bytes) */
+static uint32_t mat_color(uint32_t handle)                               /* the material's diffuse colour as D3DCOLOR */
+{
+    if (!handle) return 0xff000000u;
+    PMat *m = 0;
+    for (uint32_t k = 1; k < nobjs; k++) if (objs[k].type == T_MAT && ((PMat *)objs[k].p)->g == handle) { m = objs[k].p; break; }
+    if (!m) return 0xff000000u;
+    uint32_t out = 0;
+    for (int k = 0; k < 4; k++) {
+        float f; memcpy(&f, &m->data[1 + k], 4); int v = (int)(f * 255.0f + 0.5f); v = v < 0 ? 0 : v > 255 ? 255 : v;
+        out |= (uint32_t)v << (k == 3 ? 24 : 16 - 8 * k);                 /* r, g, b, a */
+    }
+    return out | 0xff000000u;
+}
+M(mt_QueryInterface, 3) ME(PMat, T_MAT) rt_w32(G_MEM, ARG(2), me->g); me->ref++; RET(DD_OK, 3); END
+M(mt_AddRef, 1) ME(PMat, T_MAT) RET((uint32_t)++me->ref, 1); END
+M(mt_Release, 1) ME(PMat, T_MAT) RET((uint32_t)(me->ref > 0 ? --me->ref : 0), 1); END
+M(mt_SetMaterial, 2) ME(PMat, T_MAT) for (int k = 0; k < 20; k++) me->data[k] = rt_r32(G_MEM, ARG(1) + 4 * (uint32_t)k); RET(DD_OK, 2); END
+M(mt_GetMaterial, 2) ME(PMat, T_MAT) for (int k = 1; k < 20; k++) rt_w32(G_MEM, ARG(1) + 4 * (uint32_t)k, me->data[k]); RET(DD_OK, 2); END
+M(mt_GetHandle, 3) ME(PMat, T_MAT) rt_w32(G_MEM, ARG(2), me->g); RET(DD_OK, 3); END
+typedef struct PLight { int ref; uint32_t g; uint32_t data[26]; } PLight;
+M(lt_QueryInterface, 3) ME(PLight, T_LIGHT) rt_w32(G_MEM, ARG(2), me->g); me->ref++; RET(DD_OK, 3); END
+M(lt_AddRef, 1) ME(PLight, T_LIGHT) RET((uint32_t)++me->ref, 1); END
+M(lt_Release, 1) ME(PLight, T_LIGHT) RET((uint32_t)(me->ref > 0 ? --me->ref : 0), 1); END
+OK_M(lt_Initialize, 2)
+M(lt_SetLight, 2) ME(PLight, T_LIGHT) for (int k = 0; k < 26; k++) me->data[k] = rt_r32(G_MEM, ARG(1) + 4 * (uint32_t)k); RET(DD_OK, 2); END
+M(lt_GetLight, 2) ME(PLight, T_LIGHT) for (int k = 1; k < 26; k++) rt_w32(G_MEM, ARG(1) + 4 * (uint32_t)k, me->data[k]); RET(DD_OK, 2); END
+M(d2_CreateMaterial, 3) PMat *m = calloc(1, sizeof *m); m->ref = 1; m->g = iface(vt_mat, T_MAT, m); rt_w32(G_MEM, ARG(1), m->g); RET(DD_OK, 3); END
+M(d2_CreateLight, 3) PLight *l = calloc(1, sizeof *l); l->ref = 1; l->g = iface(vt_light, T_LIGHT, l); rt_w32(G_MEM, ARG(1), l->g); RET(DD_OK, 3); END
+M(d2_EnumDevices, 3)                                                    /* (callback(guid, description, name, hal, hel, ctx), ctx): DirectX 5 descriptions */
+    uint32_t cb = ARG(1), ctx = ARG(2), b = heap_alloc(w32_process_heap, 8, 16 + 64 + 32 + 2 * 204);
+    memcpy(GP(b), HAL_GUID, 16); strcpy((char *)GP(b + 16), "Native renderer"); strcpy((char *)GP(b + 80), "Direct3D HAL");
+    uint32_t hal = b + 112, hel = b + 112 + 204; rt_w32(G_MEM, hal, 204); fill_caps(hal); memset(GP(hel), 0, 204); rt_w32(G_MEM, hel, 204);
+    uint32_t a[6] = {b, b + 16, b + 80, hal, hel, ctx}; uint32_t r = w32_callback(c, cb, 6, a);
+    dlog("IDirect3D2 EnumDevices: the HAL (callback -> %u)", r);
+    heap_free(w32_process_heap, b); RET(DD_OK, 3);
+END
+M(d2_FindDevice, 3)                                                     /* DirectX 5 D3DFINDDEVICERESULT: 204-byte descriptions */
+    uint32_t r = ARG(2), size = rt_r32(G_MEM, r), desc = size > 20 ? (size - 20) / 2 : 0;
+    if (desc < 172 || desc > 252) desc = 204;
+    memcpy(GP(r + 4), HAL_GUID, 16);
+    rt_w32(G_MEM, r + 20, desc); fill_caps(r + 20);
+    memset(GP(r + 20 + desc), 0, desc); rt_w32(G_MEM, r + 20 + desc, desc);
+    dlog("IDirect3D2 FindDevice: the HAL (descriptions %u bytes)", desc); RET(DD_OK, 3);
+END
+static uint32_t create_device(Ctx *c, PDraw *dd, uint32_t surface, uint32_t out, int v2)
+{
+    PSurf *rt = the(surface, T_SURF);
+    if (!rt) return DDERR_INVALIDPARAMS;
+    if (!rt->gid) gpu_attach(rt, 1);
+    if (rt->zbuf && !rt->zbuf->gid) gpu_attach(rt->zbuf, 2);
+    PDev *d = calloc(1, sizeof *d); d->ref = 1; d->dd = dd; d->rt = rt; d->v2 = v2; d->g = iface(v2 ? vt_dev2 : vt_dev, T_DEV, d);
+    d->rs[7] = rt->zbuf ? 1 : 0; d->rs[14] = 1; d->rs[21] = 2; d->rs[22] = 3; d->rs[23] = 4; d->rs[25] = 8; d->rs[19] = 2; d->rs[20] = 1;
+    for (int k = 0; k < 256; k++) if (d->rs[k]) rs_emit((uint32_t)k, d->rs[k]);
+    rs_emit(22, 1);
+    for (uint32_t k = 0; k < 2; k++) { tss_emit(k, 16, 1); tss_emit(k, 17, 1); }
+    dsr_d3d9_w = rt->w; dsr_d3d9_h = rt->h;
+    dlog("CreateDevice%s on %ux%ux%u (GPU %u)%s", v2 ? " (IDirect3DDevice2)" : "", rt->w, rt->h, rt->bpp, rt->gid, rt->zbuf ? " with depth" : "");
+    (void)c; rt_w32(G_MEM, out, d->g); return DD_OK;
+}
+M(d2_CreateDevice, 4) ME(PDraw, T_D3D) RET(create_device(c, me, ARG(2), ARG(3), 1), 4); END   /* (device guid, render target, out) */
+M(dv2_EnumTextureFormats, 3)                                             /* (callback(DDSURFACEDESC *, ctx), ctx) */
+    uint32_t cb = ARG(1), ctx = ARG(2), sd = heap_alloc(w32_process_heap, 8, 108);
+    static const uint32_t fmts[][6] = {                                  /* flags, bits, r, g, b, a */
+        {0x40, 16, 0xf800, 0x07e0, 0x001f, 0}, {0x41, 16, 0x7c00, 0x03e0, 0x001f, 0x8000},
+        {0x41, 16, 0x0f00, 0x00f0, 0x000f, 0xf000}, {0x41, 32, 0xff0000, 0xff00, 0xff, 0xff000000u}, {0x40, 32, 0xff0000, 0xff00, 0xff, 0}};
+    for (int k = 0; k < 5; k++) {
+        memset(GP(sd), 0, 108); rt_w32(G_MEM, sd, 108); rt_w32(G_MEM, sd + SD_FLAGS, DDSD_CAPS | DDSD_PIXELFORMAT); rt_w32(G_MEM, sd + SD_CAPS, 0x1000);
+        uint32_t pf = sd + SD_PF; rt_w32(G_MEM, pf, 32);
+        for (int j = 0; j < 6; j++) rt_w32(G_MEM, pf + (j ? 8 + 4 * (uint32_t)j : 4), fmts[k][j]);
+        uint32_t a[2] = {sd, ctx}; if (!w32_callback(c, cb, 2, a)) break;
+    }
+    heap_free(w32_process_heap, sd); RET(DD_OK, 3);
+END
+M(dv2_SwapTextureHandles, 3) RET(DD_OK, 3); END
+M(dv2_GetRenderTarget, 2) ME(PDev, T_DEV) rt_w32(G_MEM, ARG(1), me->rt ? me->rt->g[0] : 0); if (me->rt) __atomic_add_fetch(&me->rt->ref, 1, __ATOMIC_SEQ_CST); RET(DD_OK, 2); END
 
 /* ---- vtables ---- */
 typedef void (*Fn)(Ctx *);
@@ -1127,6 +1215,18 @@ static void init_vtables(void)
     _Static_assert(sizeof d3 / sizeof *d3 == 12 && sizeof dv / sizeof *dv == 42 && sizeof vp / sizeof *vp == 21 && sizeof tx / sizeof *tx == 6, "DirectX 6 vtables");
     static const Fn vb[] = { vb_QueryInterface, vb_AddRef, vb_Release, vb_Lock, vb_Unlock, vb_ProcessVertices, vb_GetVertexBufferDesc, vb_Optimize };
     vt_vb = vtable("IDirect3DVertexBuffer", vb, 8);
+    static const Fn d2[] = { d3_QueryInterface, d3_AddRef, d3_Release, d2_EnumDevices, d2_CreateLight, d2_CreateMaterial, d3_CreateViewport,
+        d2_FindDevice, d2_CreateDevice };
+    static const Fn dv2[] = { dv_QueryInterface, dv_AddRef, dv_Release, dv_GetCaps, dv2_SwapTextureHandles, dv_GetStats, dv_AddViewport,
+        dv_DeleteViewport, dv_NextViewport, dv2_EnumTextureFormats, dv_BeginScene, dv_EndScene, dv_GetDirect3D, dv_SetCurrentViewport,
+        dv_GetCurrentViewport, dv_SetRenderTarget, dv2_GetRenderTarget, dv_Begin, dv_BeginIndexed, dv_Vertex, dv_Index, dv_End,
+        dv_GetRenderState, dv_SetRenderState, dv_GetLightState, dv_SetLightState, dv_SetTransform, dv_GetTransform, dv_MultiplyTransform,
+        dv_DrawPrimitive, dv_DrawIndexedPrimitive, dv_SetClipStatus, dv_GetClipStatus };
+    static const Fn mt[] = { mt_QueryInterface, mt_AddRef, mt_Release, mt_SetMaterial, mt_GetMaterial, mt_GetHandle };
+    static const Fn lt[] = { lt_QueryInterface, lt_AddRef, lt_Release, lt_Initialize, lt_SetLight, lt_GetLight };
+    _Static_assert(sizeof d2 / sizeof *d2 == 9 && sizeof dv2 / sizeof *dv2 == 33, "DirectX 5 vtables");
+    vt_d3d2 = vtable("IDirect3D2", d2, 9); vt_dev2 = vtable("IDirect3DDevice2", dv2, 33);
+    vt_mat = vtable("IDirect3DMaterial2", mt, 6); vt_light = vtable("IDirect3DLight", lt, 6);
     vt_d3d = vtable("IDirect3D3", d3, 12); vt_dev = vtable("IDirect3DDevice3", dv, 42); vt_vp = vtable("IDirect3DViewport3", vp, 21); vt_tex = vtable("IDirect3DTexture2", tx, 6);
 }
 
