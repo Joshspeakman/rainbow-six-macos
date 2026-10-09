@@ -192,6 +192,7 @@ IMPL(advapi32, RegOpenKeyA) { RET(reg_open(ARG(0), ARG(1), ARG(2)), 3); }
 IMPL(advapi32, RegCreateKeyExA)
 {
     char p[1024]; uint32_t out = ARG(7), disp = ARG(8);
+    reg_seed();
     pthread_mutex_lock(&rlock);
     int existed = 0; RKey *k = 0;
     if (!full_path(ARG(0), GS(ARG(1)), p, sizeof p)) { existed = lookup(p, 0) != 0; k = lookup(p, 1); }

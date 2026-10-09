@@ -592,7 +592,7 @@ int dsr_gl_exec(DSRRenderer *r,uint32_t op,const uint8_t *data,uint32_t size) {
  case DSR_DEPTH_UPLOAD: depth_upload(r,p,size); break;
  case DSR_UPLOAD_OVER: upload(r,p,size,1); break;
  case DSR_READBACK: readback(r,p); break;
- case DSR_BLT: if(p[5]) blit(r,p[0],(const int32_t *)(p+1),p[5],(const int32_t *)(p+6),0,0); else if(!(p[10]&0x20000)) blit(r,p[0],(const int32_t *)(p+1),0,(const int32_t *)(p+1),1,p[11]); break;
+ case DSR_BLT: if(p[5]) blit(r,p[0],(const int32_t *)(p+1),p[5],(const int32_t *)(p+6),(p[10]&0x18000)?3:0,0);   /* DDBLT_KEYSRC(OVERRIDE): keyed texels (alpha 0) left out */ else if(!(p[10]&0x20000)) blit(r,p[0],(const int32_t *)(p+1),0,(const int32_t *)(p+1),1,p[11]); break;
  case DSR_GLSL_CREATE: glsl_create(r,p,size); break;
  case DSR_PROG_USE: r->cur=p[0]; break;
  case DSR_SHADER_CONST: shader_consts(r,p,size); break;

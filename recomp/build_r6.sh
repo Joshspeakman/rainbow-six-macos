@@ -1,7 +1,7 @@
 #!/bin/bash
 # build_r6.sh <game folder> [outdir]
 # Recompile the user's own Tom Clancy's Rainbow Six (GOG 1.04: RainbowSix.exe) with the game-folder DLLs it loads
-# (SMACKW32.DLL, Smacker video; VCT32150.dll, the Voxware voice codec) into C and link it with the native runtime
+# (SMACKW32.DLL, Smacker video) into C and link it with the native runtime
 # (tools/build_runtime.sh: Metal on macOS, SDL/OpenGL on Linux). Everything generated stays local (work/ is git-ignored).
 #
 # Any RainbowSix.exe is accepted, including one with a mod patched in: a new executable PE section (any name) that
@@ -11,7 +11,8 @@
 # through pointers it builds at run time can be listed in R6_SEEDS=<file> (hex addresses, one per line). The stock
 # GOG executable's SHA-256 is printed; R6_EXE_SHA=<sha> makes the build refuse any other file.
 #
-# Not lifted: GOG's winmm.dll (a CD-audio-to-Ogg shim) and the libvorbis/libogg DLLs behind it; runtime/win32/winmm.c
+# Not lifted: VCT32150.dll (Voxware voice chat; its codecs are further DLLs, MVoice.vxp, loaded by name): r6_imports.c
+# answers "no codec installed", as the original reports under Wine. GOG's winmm.dll (a CD-audio-to-Ogg shim) and the libvorbis/libogg DLLs behind it; runtime/win32/winmm.c
 # implements the MCI CD-audio commands and plays MUSIC/TrackNN.ogg itself.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -37,11 +38,11 @@ echo "== analysis"
 sed -n '/^functions /p; /^seed sources/p; /^decode failures:/p; /^jump tables /p; /^SEH:/p' "$OUT/analysis.log"
 echo "== lifting"
 "$PY" "$HERE/tools/lift.py" "$EXE" "$OUT/analysis.json" "$OUT" --game r6 | grep -Ev '^unsupported: \{\}$'
-# the game's own DLLs, loaded by name: both want 0x10000000, so VCT32150 is lifted from a copy relocated to 0x11000000
-# (tools/rebase_pe.py); loader.c applies the same relocations to the original at run time.
+# the game's own DLLs, loaded by name (one wanting an address another has would be lifted from a copy relocated with
+# tools/rebase_pe.py, spec NAME@0xADDRESS; loader.c applies the same relocations to the original at run time)
 NIMP=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["imports"]))' "$OUT/image.json")
 IMGS=("=")
-for spec in SMACKW32.DLL VCT32150.dll@0x11000000; do
+for spec in SMACKW32.DLL; do
   rel=${spec%@*}; tag=$(echo "$rel" | tr . _ | tr A-Z a-z); src="$GAME/$rel"
   [ -f "$src" ] || { echo "missing $src"; exit 1; }
   if [[ $spec == *@* ]]; then "$PY" "$HERE/tools/rebase_pe.py" "$src" "$OUT/$rel" "${spec#*@}"; src="$OUT/$rel"; fi

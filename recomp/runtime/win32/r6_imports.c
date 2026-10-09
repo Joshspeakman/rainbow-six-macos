@@ -22,3 +22,22 @@ IMPL(user32, LoadImageA)                                                      /*
     uint32_t id = ARG(1) & 0xffff, type = ARG(2);
     RET(type == 1 ? 0x31000 + id : type == 2 ? 0x30000 + id : 0, 6);          /* IMAGE_ICON / IMAGE_CURSOR as LoadIcon/LoadCursor; no bitmaps */
 }
+
+/* ---- vct32150.dll (Voxware voice codecs, for in-game voice chat): "the engine is there, no codec installed", which
+ * is what the original reports under Wine too ("Could not find an appropriate Voxware CODEC"); the game then plays
+ * without voice. Ordinal 100 is the engine's init (handle out, info: version at +0x18, codec count at +0x20). ---- */
+IMPL(vct32150, ord100)
+{
+    uint32_t h = ARG(0), info = ARG(1);
+    if (h) rt_w32(G_MEM, h, 1);
+    if (info) { rt_w32(G_MEM, info + 0x18, 0x10005); rt_w16(G_MEM, info + 0x20, 0); }
+    RET(0, 2);
+}
+IMPL(vct32150, ord101) { RET(0, 1); }                                         /* shut down */
+IMPL(vct32150, ord200) { RET(1, 3); }                                         /* codec info by index: none */
+IMPL(vct32150, ord1100) { RET(1, 1); }
+IMPL(vct32150, ord1110) { RET(1, 1); }
+IMPL(vct32150, ord1120) { RET(1, 1); }
+IMPL(vct32150, ord2100) { RET(1, 1); }
+IMPL(vct32150, ord2110) { RET(1, 1); }
+IMPL(vct32150, ord2120) { RET(1, 1); }
