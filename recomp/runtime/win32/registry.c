@@ -214,6 +214,11 @@ IMPL(advapi32, RegQueryValueExA)
         if (data) {
             if (!szp || rt_r32(G_MEM, szp) < v->size) { if (szp) rt_w32(G_MEM, szp, v->size); RET(234, 6); }   /* ERROR_MORE_DATA */
             memcpy(GP(data), v->data, v->size);
+            /* a string stored without its terminator (Rainbow Six writes "TRUE" as 4 bytes): Windows ends it in the
+             * caller's buffer when there is room, so it never reads past into old bytes ("640x480" -> "640x480000") */
+            if ((v->type == 1 || v->type == 2) && (!v->size || v->data[v->size - 1]) && rt_r32(G_MEM, szp) > v->size) {
+                rt_w8(G_MEM, data + v->size, 0); rt_w32(G_MEM, szp, v->size + 1); RET(0, 6);
+            }
         }
         if (szp) rt_w32(G_MEM, szp, v->size);
         RET(0, 6);

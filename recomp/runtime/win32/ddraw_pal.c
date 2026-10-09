@@ -439,6 +439,7 @@ M(s_Blt, 6) ME(PSurf, T_SURF)                                       /* (dst rect
         shown_after_copy(c, me, dr); RET(DD_OK, 6);
     }
     if (!src) { dlog("Blt flags %x without a source", flags); RET(DD_OK, 6); }
+    gpu_readback(src);                                                /* from a render target: what the GPU drew (a cursor's save-under) */
     rect_in(ARG(3), src, sr);
     int key = 0; uint32_t klo = 0, khi = 0;
     if ((flags & DDBLT_KEYSRCOVERRIDE) && fx) { key = 1; klo = rt_r32(G_MEM, fx + 92); khi = rt_r32(G_MEM, fx + 96); }
@@ -488,7 +489,14 @@ M(s_Flip, 3) ME(PSurf, T_SURF)                                      /* (target o
                         snprintf(f, sizeof f, "%s/f%02d-%ld.bgra", bd, burst, (long)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000));
                         FILE *o = fopen(f, "wb"); if (o) { fwrite(px, 4, (size_t)b->w * b->h, o); fclose(o); } }
                     free(px); if (++burst == 12) burst = -1; } } }
-        ddraw_pal_frames++; dsr_present(c, b->gid); RET(DD_OK, 3);
+        ddraw_pal_frames++; dsr_present(c, b->gid);
+#ifdef R6_EDITION
+        if (me->gid && !getenv("R6_FLIP_NOSWAP")) {                 /* as DirectDraw does: the buffers trade places (the game redraws only what changed) */
+            uint32_t t = me->gid; me->gid = b->gid; b->gid = t; int n = me->gpu_newer; me->gpu_newer = b->gpu_newer; b->gpu_newer = n;
+            t = me->mem; me->mem = b->mem; b->mem = t;
+        }
+#endif
+        RET(DD_OK, 3);
     }
     uint32_t t = me->mem; me->mem = b->mem; b->mem = t;              /* the surfaces keep their identities; their pixels swap */
     show(c, me, 0, 0, me->w, me->h);
@@ -684,8 +692,9 @@ M(dd_EnumDisplayModes, 5) ME(PDraw, T_DD)                           /* (flags, d
         rt_w32(G_MEM, d + SD_FLAGS, DDSD_HEIGHT | DDSD_WIDTH | DDSD_PITCH | DDSD_PIXELFORMAT | DDSD_REFRESHRATE);
         rt_w32(G_MEM, d + SD_WIDTH, w); rt_w32(G_MEM, d + SD_HEIGHT, h); rt_w32(G_MEM, d + SD_PITCH, w * bpp / 8); rt_w32(G_MEM, d + SD_REFRESH, 60);
         uint32_t pf[8]; pf_for(pf, bpp); for (int j = 0; j < 8; j++) rt_w32(G_MEM, d + SD_PF + 4 * (uint32_t)j, pf[j]);
-        uint32_t a[2] = {d, ctx};
-        if (w32_callback(c, cb, 2, a) == 0) goto done;
+        uint32_t a[2] = {d, ctx}, r = w32_callback(c, cb, 2, a);
+        dlog("EnumDisplayModes (v%u, filter %x flags %x) %ux%ux%u -> %u", v, filter, filter ? rt_r32(G_MEM, filter + SD_FLAGS) : 0, w, h, bpp, r);
+        if (r == 0) goto done;
     }
 done:
     heap_free(w32_process_heap, d); RET(DD_OK, 5);
@@ -837,10 +846,13 @@ static void dev_draw(PDev *d, uint32_t prim, uint32_t vt, uint32_t verts, uint32
     }
     if (!d->rt || !d->rt->gid || !nv) return;
     uint32_t fvf = legacy_fvf(vt), stride = fvf_stride(fvf), vbytes = nv * stride, ibytes = (ni * 2 + 3) & ~3u;
+    int lvertex = fvf == 0x1e2;                                       /* D3DLVERTEX: its reserved dword after the position is dropped */
+    if (lvertex) { fvf = 0x1c2; stride = 28; vbytes = nv * 28; }
     dev_bind(d);
     uint32_t *p = cmd_begin(DSR_DRAW, 16 + vbytes + ibytes);
     p[0] = prim; p[1] = fvf; p[2] = nv; p[3] = ni;
-    memcpy(p + 4, G_MEM + verts, vbytes);
+    if (lvertex) for (uint32_t k = 0; k < nv; k++) { uint8_t *o = (uint8_t *)(p + 4) + 28 * k; const uint8_t *v = G_MEM + verts + 32 * k; memcpy(o, v, 12); memcpy(o + 12, v + 16, 16); }
+    else memcpy(p + 4, G_MEM + verts, vbytes);
     if (ni) { memset((uint8_t *)(p + 4) + vbytes, 0, ibytes); memcpy((uint8_t *)(p + 4) + vbytes, G_MEM + idx, ni * 2); }
     cmd_end(); d->rt->gpu_newer = 1;
 }
@@ -1010,9 +1022,23 @@ M(dv_SetRenderState, 3) ME(PDev, T_DEV)
     RET(DD_OK, 3);
 END
 OK_M(dv_SetLightState, 3) M(dv_GetLightState, 3) rt_w32(G_MEM, ARG(2), 0); RET(DD_OK, 3); END
-M(dv_SetTransform, 3) { static int n; if (n++ < 6) dlog("SetTransform %u", ARG(1)); } RET(DD_OK, 3); END
-M(dv_GetTransform, 3) memset(GP(ARG(2)), 0, 64); for (int k = 0; k < 4; k++) rt_w32(G_MEM, ARG(2) + 20 * (uint32_t)k, 0x3f800000u); RET(DD_OK, 3); END
-OK_M(dv_MultiplyTransform, 3)
+/* world, view and projection (D3DTRANSFORMSTATE_ 1, 2, 3): Rainbow Six draws its world as D3DVT_LVERTEX, transformed
+ * here (the renderer's slots 1..3 are the same three); the DirectX 6 games only drew pre-transformed vertices */
+static float dev_xf[4][16] = {{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}};
+static void xf_emit(uint32_t t) { uint32_t *p = cmd_begin(DSR_TRANSFORM, 68); p[0] = t; memcpy(p + 1, dev_xf[t], 64); cmd_end(); }
+M(dv_SetTransform, 3)
+    uint32_t t = ARG(1); if (t < 1 || t > 3) RET(DDERR_INVALIDPARAMS, 3);
+    memcpy(dev_xf[t], GP(ARG(2)), 64); xf_emit(t);
+    { static int n; if (n++ < 6) { const float *m = dev_xf[t]; dlog("SetTransform %u: %g %g %g %g / %g %g %g %g / %g %g %g %g / %g %g %g %g", t, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]); } }
+    RET(DD_OK, 3);
+END
+M(dv_GetTransform, 3) uint32_t t = ARG(1); if (t < 1 || t > 3) RET(DDERR_INVALIDPARAMS, 3); memcpy(GP(ARG(2)), dev_xf[t], 64); RET(DD_OK, 3); END
+M(dv_MultiplyTransform, 3)                                               /* (state, matrix): state = matrix x state */
+    uint32_t t = ARG(1); if (t < 1 || t > 3) RET(DDERR_INVALIDPARAMS, 3);
+    float a[16], r[16]; memcpy(a, GP(ARG(2)), 64);
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) { float v = 0; for (int k = 0; k < 4; k++) v += a[4 * i + k] * dev_xf[t][4 * k + j]; r[4 * i + j] = v; }
+    memcpy(dev_xf[t], r, 64); xf_emit(t); RET(DD_OK, 3);
+END
 M(dv_DrawPrimitive, 6) ME(PDev, T_DEV) dev_draw(me, ARG(1), ARG(2), ARG(3), ARG(4), 0, 0); RET(DD_OK, 6); END
 M(dv_DrawIndexedPrimitive, 8) ME(PDev, T_DEV) dev_draw(me, ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6)); RET(DD_OK, 8); END
 OK_M(dv_SetClipStatus, 2) M(dv_GetClipStatus, 2) memset(GP(ARG(1)), 0, 36); RET(DD_OK, 2); END
@@ -1047,6 +1073,7 @@ OK_M(vp_Initialize, 2)
 static PDev *dev_of_vp(PVp *v) { for (uint32_t k = 1; k < nobjs; k++) if (objs[k].type == T_DEV) { PDev *d = objs[k].p; for (int j = 0; j < d->nvp; j++) if (d->vps[j] == v) return d; } return 0; }
 M(vp_SetViewport2, 2) ME(PVp, T_VP)                                      /* D3DVIEWPORT2 (or D3DVIEWPORT: the same x, y, w, h, z range) */
     for (int k = 0; k < 11; k++) me->data[k] = rt_r32(G_MEM, ARG(1) + 4 * (uint32_t)k);
+    { static int n; if (n++ < 8) { float f[6]; memcpy(f, me->data + 5, 24); dlog("SetViewport%s %u,%u %ux%u | %g %g %g %g | z %g..%g", rt_r32(G_MEM, ARG(0)) == vt_vp ? "" : "?", me->data[1], me->data[2], me->data[3], me->data[4], f[0], f[1], f[2], f[3], f[4], f[5]); } }
     me->set = 1; PDev *d = dev_of_vp(me); if (d && d->vp == me) dev_viewport(d);
     RET(DD_OK, 2);
 END

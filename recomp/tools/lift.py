@@ -386,7 +386,52 @@ class Lifter:
                     b.mnemonic == 'push' and b.operands[0].type == X.X86_OP_IMM and self.SEH_HANDLER4 and (b.operands[0].imm & 0xffffffff) == self.SEH_HANDLER4
                     or b.mnemonic == 'call' and b.operands[0].type == X.X86_OP_IMM and (b.operands[0].imm & 0xffffffff) in self.SEH_PROLOG4):
                 out += self.scope_handlers(a.operands[0].imm & 0xffffffff, 16, 0xfffffffe)
+            # Visual C++ exceptions (push -1; push <mov eax, FuncInfo; jmp __CxxFrameHandler>; mov eax, fs:[0]): after a
+            # catch block runs, __CxxFrameHandler jumps (jmp eax in _JumpToContinuation) to the address the catch funclet
+            # returned. Those continuations become landing pads of this function, like __except blocks.
+            elif a.mnemonic == 'push' and b.mnemonic == 'push' and a.operands[0].type == X.X86_OP_IMM and b.operands[0].type == X.X86_OP_IMM \
+                    and (a.operands[0].imm & 0xffffffff) == 0xffffffff:
+                out += self.cxx_continuations(b.operands[0].imm & 0xffffffff)
         return sorted(set(out))
+    def walk_all(self, f, limit=20000):
+        """the instructions reachable from f, through other functions' starts too (a catch funclet whose tail the
+        analysis took for a function of its own)"""
+        insns = {}; stack = [f]
+        while stack and len(insns) < limit:
+            va = stack.pop()
+            while va not in insns:
+                i = self.ins(va)
+                if i is None: break
+                insns[va] = i; mn = i.mnemonic; op0 = i.operands[0] if i.operands else None
+                if mn == 'jmp':
+                    if op0.type == X.X86_OP_IMM: stack.append(op0.imm & 0xffffffff)
+                    break
+                if mn in ('ret', 'int3', 'hlt') + RET_FORMS: break
+                if (mn[0] == 'j' and mn != 'jmp') or mn.startswith('loop'): stack.append(op0.imm & 0xffffffff)
+                va += i.size
+        return insns
+    def cxx_continuations(self, stub):
+        """catch continuations of a C++ EH frame handler stub: every `mov eax, imm32; ret` in its catch funclets"""
+        i = self.ins(stub)
+        if i is None or i.mnemonic != 'mov' or i.op_str.split(',')[0] != 'eax' or i.operands[1].type != X.X86_OP_IMM: return []
+        j = self.ins(stub + i.size)
+        if j is None or j.mnemonic != 'jmp': return []
+        fi = i.operands[1].imm & 0xffffffff; magic = self.pe.u32(fi)
+        if magic is None or not 0x19930520 <= magic <= 0x19930522: return []
+        ntry, tmap = self.pe.u32(fi + 12), self.pe.u32(fi + 16)
+        out = []
+        for t in range(min(ntry or 0, 256)):
+            ncatch, harr = self.pe.u32(tmap + 20 * t + 12), self.pe.u32(tmap + 20 * t + 16)
+            for k in range(min(ncatch or 0, 64)):
+                fn = self.pe.u32(harr + 16 * k + 12)
+                if fn is None or not self.TLO <= fn < self.THI: continue
+                body = self.walk_all(fn)
+                for va, ins in body.items():
+                    if ins.mnemonic == 'mov' and ins.op_str.startswith('eax, ') and ins.operands[1].type == X.X86_OP_IMM:
+                        nx = body.get(va + ins.size)
+                        tgt = ins.operands[1].imm & 0xffffffff
+                        if nx is not None and nx.mnemonic == 'ret' and self.TLO <= tgt < self.THI: out.append(tgt)
+        return out
     def scope_handlers(self, table, skip, top):
         """__except blocks of a scope table: records {enclosing level, filter, handler} after `skip` header bytes
         (SEH4's GS/EH cookie offsets), enclosing level `top` for the outermost; a record without a filter is __finally"""
