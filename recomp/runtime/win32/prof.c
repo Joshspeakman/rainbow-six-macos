@@ -3,6 +3,11 @@
  * id and the interrupted instruction pointer, 16-byte records (u32 tid, u32 ms since start, u64 rip) appended to <file> with
  * write() (async-signal-safe) every 4096 samples. tools/profile.py maps the addresses to function names with nm. */
 #define _GNU_SOURCE
+#ifdef __APPLE__
+#define _XOPEN_SOURCE 700                        /* the ucontext definitions */
+#define _DARWIN_C_SOURCE
+#include <pthread.h>
+#endif
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,7 +15,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/time.h>
+#ifndef __APPLE__
 #include <sys/syscall.h>
+#endif
 #include <ucontext.h>
 #include <time.h>
 
@@ -26,9 +33,16 @@ static void on_prof(int sig, siginfo_t *si, void *uc_)
     uint32_t k = nbuf++;
     if (k >= 4096) return;                       /* another thread is flushing: drop this sample */
     struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
-    buf[k].tid = (uint32_t)syscall(SYS_gettid); buf[k].ms = (uint32_t)((now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000);
+#ifdef __APPLE__
+    { uint64_t t = 0; pthread_threadid_np(NULL, &t); buf[k].tid = (uint32_t)t; }
+#else
+    buf[k].tid = (uint32_t)syscall(SYS_gettid);
+#endif
+    buf[k].ms = (uint32_t)((now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000);
 #if defined(__x86_64__)
     buf[k].rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+#elif defined(__APPLE__) && defined(__aarch64__)
+    buf[k].rip = (uint64_t)uc->uc_mcontext->__ss.__pc;
 #elif defined(__aarch64__)
     buf[k].rip = (uint64_t)uc->uc_mcontext.pc;
 #endif

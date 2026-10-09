@@ -458,7 +458,15 @@ static void mm_timer_run(Ctx *c, void *arg)
     do {
         uint64_t ns = (uint64_t)next.tv_nsec + (uint64_t)t->delay * 1000000u;
         next.tv_sec += (time_t)(ns / 1000000000u); next.tv_nsec = (long)(ns % 1000000000u);
+#ifdef __APPLE__
+        {   /* no absolute-time clock_nanosleep: sleep what is left until the deadline (the cadence stays the deadlines') */
+            struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t left = (int64_t)(next.tv_sec - now.tv_sec) * 1000000000 + (next.tv_nsec - now.tv_nsec);
+            if (left > 0) { struct timespec d = {(time_t)(left / 1000000000), (long)(left % 1000000000)}; nanosleep(&d, 0); }
+        }
+#else
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, 0);
+#endif
         if (t->killed) break;
         if (t->flags & 0x30) w32_event_signal(t->fn, 1);              /* TIME_CALLBACK_EVENT_SET / _PULSE */
         else { uint32_t a[5] = {t->id, 0, t->user, 0, 0}; w32_callback(c, t->fn, 5, a); }
