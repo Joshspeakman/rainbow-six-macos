@@ -51,7 +51,21 @@ IMPL(wsock32, ord52)
             freeifaddrs(ifs);
         }
         if (!n) addrs[n++] = htonl(INADDR_LOOPBACK);
+#ifdef R6_EDITION
+        /* Rainbow Six binds its host socket and LAN announcer to the first address: the interface of the default route
+         * (not a VPN or container bridge), or R6_HOST_IP; never the router's public address (it isn't this machine's) */
+        { uint32_t want = 0; const char *e = getenv("R6_HOST_IP"); struct in_addr ia;
+          if (e && inet_pton(AF_INET, e, &ia) == 1) want = ia.s_addr;
+          else { int s = socket(AF_INET, SOCK_DGRAM, 0); struct sockaddr_in to = {0}, me = {0}; socklen_t ml = sizeof me;
+                 to.sin_family = AF_INET; to.sin_port = htons(9); to.sin_addr.s_addr = htonl(0xc0000201u);   /* 192.0.2.1: routed, never sent */
+                 if (s >= 0 && !connect(s, (struct sockaddr *)&to, sizeof to) && !getsockname(s, (struct sockaddr *)&me, &ml)) want = me.sin_addr.s_addr;
+                 if (s >= 0) close(s); }
+          for (int i = 1; i < n && want; i++) if (addrs[i] == want) { addrs[i] = addrs[0]; addrs[0] = want; }
+          if (want && addrs[0] != want && n < 16) { memmove(addrs + 1, addrs, sizeof *addrs * (size_t)n); addrs[0] = want; n++; } }
+        uint32_t pub = 0;
+#else
         uint32_t portmap_public_ip(void); uint32_t pub = getenv("DS_NO_PORTMAP") ? 0 : portmap_public_ip();   /* for internet players */
+#endif
         int dup = 0; for (int i = 0; i < n; i++) if (addrs[i] == pub) dup = 1;
         if (pub && !dup && n < 16) { memmove(addrs + 1, addrs, sizeof *addrs * (size_t)n); addrs[0] = pub; n++; }   /* first: the one to give out */
     } else {

@@ -207,6 +207,8 @@ int w32_load(const char *exe_path)
         uint32_t va = *(uint32_t *)(s + 12), vs = *(uint32_t *)(s + 8), rs = *(uint32_t *)(s + 16), ra = *(uint32_t *)(s + 20);
         if (!ra) continue;                       /* Watcom's .bss: a raw size but no file data */
         if (!vs) vs = rs;                        /* Watcom leaves VirtualSize 0 */
+        vs = (vs + 0xfff) & ~0xfffu;             /* the file's bytes up to the page-rounded size, as Windows maps them (GOG's
+                                                  * Rainbow Six keeps patch code after .text's VirtualSize) */
         memcpy(G_MEM + w32_image_base + va, d + ra, rs < vs ? rs : vs);
         if ((*(uint32_t *)(s + 36) & 0x20000000u) && memcmp(s, ".bind", 5) && getenv("W32_SMCLOG")) {   /* code: kept for w32_smc_check */
             extern uint8_t *w32_code_copy[8]; extern uint32_t w32_code_va[8], w32_code_n[8]; extern int w32_code_k;
