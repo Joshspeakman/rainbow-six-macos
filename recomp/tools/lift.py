@@ -49,6 +49,7 @@ class Lifter:
     hooks = {}; overrides = {}; guest_flow = False; smc = {}; slots = {}
     def __init__(self, exe, analysis):
         self.pe = PE(exe); self.TLO, self.THI, self.code = code_range(self.pe)
+        self.multi = not self.pe.section('.rld') and len([s for s in self.pe.sections if s[5] & 0x20000000 and s[0] != '.bind']) > 1
         self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32); self.md.detail = True
         a = json.load(open(analysis)); self.funcs = set(a['funcs'])
         self.imports = sorted(self.pe.imports.items())                # [(iat_va, 'DLL!name')]
@@ -64,7 +65,8 @@ class Lifter:
             # Candidate data pointers into those areas are not decoded engine
             # functions. Fail explicitly if reached; do not generate megabytes
             # of bogus "add [eax], al" instructions from their zero padding.
-            if not (self.guest_flow and va >= 0x1136000 and self.code[offset:offset + 32] == bytes(32)):
+            if not (self.guest_flow and va >= 0x1136000 and self.code[offset:offset + 32] == bytes(32)) \
+                    and not (self.multi and self.code[offset:offset + 16] == bytes(16)):   # zero data in a patched-in code section
                 for i in self.md.disasm(self.code[offset:offset + 16], va, 1): r = i
         self.cache[va] = r; return r
 

@@ -15,7 +15,8 @@ cache = {}
 def ins_at(va):
     if va in cache: return cache[va]
     r = None
-    if is_code(va) and not (relocated and va >= 0x1136000 and code[va - TLO:va - TLO + 32] == bytes(32)):
+    if is_code(va) and not (relocated and va >= 0x1136000 and code[va - TLO:va - TLO + 32] == bytes(32)) \
+            and not (multi and code[va - TLO:va - TLO + 16] == bytes(16)):   # zero-filled data in a patched-in code section
         for i in md.disasm(code[va - TLO:va - TLO + 16], va, 1): r = i
     cache[va] = r; return r
 BAD = {'in', 'out', 'insb', 'insd', 'outsb', 'outsd', 'iretd', 'hlt', 'cli', 'sti', 'int1', 'into', 'aaa', 'aas', 'aam',
