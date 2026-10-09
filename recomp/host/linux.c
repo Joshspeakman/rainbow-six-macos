@@ -389,8 +389,8 @@ int main(int argc,char **argv) {
  const char *fps=getenv("DSR_FPSCAP");
  if(!fps || !strcmp(fps,"auto") || !strcmp(fps,"display")) {
   int hz=w32_screen_hz;
-#ifdef FNV_EDITION
-  if(hz>60) hz=60;   /* Gamebryo's physics and animation misbehave above 60 fps (as on Windows without a frame limiter); DSR_FPSCAP=<n> overrides */
+#if defined(FNV_EDITION) || defined(R6_EDITION)
+  if(hz>60) hz=60;   /* Rainbow Six: game speed above 60 fps has not been compared with the original */   /* Gamebryo's physics and animation misbehave above 60 fps (as on Windows without a frame limiter); DSR_FPSCAP=<n> overrides */
 #endif
   char rate[32]; snprintf(rate,sizeof rate,"%d",hz); setenv("DSR_FPSCAP",rate,1);
  }

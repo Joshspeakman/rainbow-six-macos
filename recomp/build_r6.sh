@@ -29,10 +29,13 @@ PY="$HERE/.venv/bin/python"
 [ -x "$PY" ] || { python3 -m venv "$HERE/.venv" && "$HERE/.venv/bin/pip" install -q capstone==5.0.7 unicorn==2.1.4; }
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 python3 "$HERE/tools/compiler_compat.py" "${CC:-clang}" "$OUT/compiler-flags.txt"
-cp "$GAME/$EXE_NAME" "$OUT/$EXE_NAME"; chmod u+w "$OUT/$EXE_NAME"; EXE="$OUT/$EXE_NAME"
 if [[ -n "${R6_RELINK:-}" && -d "$OUT/obj" ]]; then              # runtime changes only: keep the lifted objects
+  [ "$(cat "$OUT/lifted.sha256" 2>/dev/null)" = "$GOT" ] || { echo "R6_RELINK: $EXE_NAME is not the file $OUT was lifted from; rebuild without R6_RELINK"; exit 1; }
+  cp "$GAME/$EXE_NAME" "$OUT/$EXE_NAME"; chmod u+w "$OUT/$EXE_NAME"
   echo "== runtime and link (R6_RELINK)"; exec "$HERE/tools/build_runtime.sh" "$OUT"
 fi
+rm -f "$OUT/lifted.sha256"
+cp "$GAME/$EXE_NAME" "$OUT/$EXE_NAME"; chmod u+w "$OUT/$EXE_NAME"; EXE="$OUT/$EXE_NAME"
 echo "== analysis"
 "$PY" "$HERE/tools/analyze.py" "$EXE" "$OUT/analysis.json" > "$OUT/analysis.log"
 sed -n '/^functions /p; /^seed sources/p; /^decode failures:/p; /^jump tables /p; /^SEH:/p' "$OUT/analysis.log"
@@ -52,6 +55,7 @@ for spec in SMACKW32.DLL; do
   IMGS+=("$tag=$rel")
 done
 "$PY" "$HERE/tools/link_tables.py" "$OUT" "${IMGS[@]}"
+echo "$GOT" > "$OUT/lifted.sha256"                               # R6_RELINK checks the executable against this
 echo "== compiling"
 rm -rf "$OUT/obj"; mkdir -p "$OUT/obj"
 JOBS="${R6_BUILD_JOBS:-16}"
