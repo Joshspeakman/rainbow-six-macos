@@ -7,7 +7,7 @@ running under Wine in a headless gamescope (the `~/Projects/r6-coop/tools` scrip
 
 ```sh
 recomp/build_r6.sh "<game folder>" [outdir]     # analyse, lift, compile, link: ~3 minutes, 16 compile jobs (R6_BUILD_JOBS)
-R6_RELINK=1 recomp/build_r6.sh "<game folder>"  # runtime/host changes only: keeps the lifted objects
+R6_RELINK=1 recomp/build_r6.sh "<game folder>"  # runtime/host changes only (refused if the exe is not the lifted one)
 recomp/work/r6/app/RainbowSixLinux --exe recomp/work/r6/RainbowSix.exe --game "<game folder>" --data <data folder>
 ```
 
@@ -124,6 +124,8 @@ non-blocking mode (Winsock behaviour; a blocking accepted socket stalled the nat
   differ per instance; manual join works. Between machines, use the standard ports.
 - Voice chat is off (no Voxware codecs); the original under Wine has none either.
 - The music level options (`ActionMusicVolume`) are not applied to the CD stream.
+- The Linux host caps the game at 60 fps (`DSR_FPSCAP=<n>` overrides); its speed above 60 was never compared with the
+  original.
 - Crash/hang reports still say "Dungeon Siege Native" and name the image DungeonSiege.exe (inherited, cosmetic).
 - `tools/analyze.py`/`lift.py` changes (zero-run cutoff, slack bytes, C++ continuations) apply to the Delta Force builds
   too and have not been re-checked there.
