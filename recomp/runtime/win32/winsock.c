@@ -124,11 +124,14 @@ IMPL(wsock32, ord1)                                     /* accept(s, addr, len*)
     int n = accept(fd, (struct sockaddr *)&a, &l);
     if (n < 0) { w32_set_last_error(c, wsa_err(errno)); RET(INVALID_SOCKET_, 3); }
     socket_no_sigpipe(n); fcntl(n, F_SETFD, FD_CLOEXEC);
+    /* Winsock: the new socket has the listening socket's properties, its non-blocking mode included (Rainbow Six's
+     * host polls the accepted socket with recv; blocking there stalled its game loop on every exchange) */
+    int nb = (fcntl(fd, F_GETFL) & O_NONBLOCK) != 0;
     pthread_mutex_lock(&s_lock); int k = 0; while (k < MAXS && S[k].fd) k++;
-    if (k < MAXS) { S[k].fd = n + 1; S[k].nb = 0; }
+    if (k < MAXS) { S[k].fd = n + 1; S[k].nb = nb; }
     pthread_mutex_unlock(&s_lock);
     if (k == MAXS) { close(n); w32_set_last_error(c, 10024); RET(INVALID_SOCKET_, 3); }
-    fcntl(n, F_SETFL, fcntl(n, F_GETFL) & ~O_NONBLOCK);  /* Windows: the new socket starts blocking */
+    if (nb) fcntl(n, F_SETFL, fcntl(n, F_GETFL) | O_NONBLOCK); else fcntl(n, F_SETFL, fcntl(n, F_GETFL) & ~O_NONBLOCK);
     to_guest(&a, ARG(1), ARG(2));
     RET(SBASE + (uint32_t)k, 3);
 }
