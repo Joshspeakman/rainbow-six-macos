@@ -522,6 +522,9 @@ int main(int argc, char **argv)
         mkdir(data, 0755); mkdir(drive_c, 0755); mkdir(overlay, 0755);
         NSRect sf = NSScreen.mainScreen.frame; w32_screen_w = (int)sf.size.width; w32_screen_h = (int)sf.size.height;
         w32_screen_scale = NSScreen.mainScreen.backingScaleFactor;
+#ifdef R6_EDITION
+        if (!getenv("DSR_FPSCAP")) setenv("DSR_FPSCAP", "60", 1);    // as the Linux host: speed above 60 fps not compared with the original
+#endif
         init_keymap();
         {   /* the launch window (resolution, frame rate, updates) unless in test mode */
             int ds_launcher_run(const char *game_dir, const char *data_dir);
