@@ -1,6 +1,8 @@
 /* WSOCK32 host name and addresses (what the multiplayer screens show) and OLE32 basics (DirectPlay 8 objects from dpnet.c). */
 #include "w32.h"
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netdb.h>

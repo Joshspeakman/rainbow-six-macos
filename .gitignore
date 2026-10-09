@@ -34,3 +34,9 @@ cdkey-hash.txt
 *.kdv
 *.bik
 *.BIK
+
+# Rainbow Six game data (never commit)
+*.ogg
+*.smk
+*.SMK
+*.vxp

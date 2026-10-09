@@ -137,7 +137,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]
 
 // Blit / fill helper: textured or solid quad into a destination rectangle.
 struct QOut { float4 pos [[position]]; float2 uv; };
-struct QUni { float4 dst; float4 src; float4 color; int4 mode; };   // dst/src in normalized [0,1] rects; mode.x: 0 tex, 1 fill
+struct QUni { float4 dst; float4 src; float4 color; int4 mode; };   // dst/src in normalized [0,1] rects; mode.x: 0 tex, 1 fill, 3 keyed tex
 vertex QOut vs_quad(uint vid [[vertex_id]], constant QUni &q [[buffer(0)]])
 {
     float2 c = float2((vid & 1) ? 1.0 : 0.0, (vid & 2) ? 1.0 : 0.0);
@@ -146,7 +146,10 @@ vertex QOut vs_quad(uint vid [[vertex_id]], constant QUni &q [[buffer(0)]])
 }
 fragment float4 fs_quad(QOut in [[stage_in]], constant QUni &q [[buffer(0)]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]])
 {
-    return q.mode.x ? q.color : t.sample(s, in.uv);
+    if (q.mode.x == 1) return q.color;
+    float4 c = t.sample(s, in.uv);
+    if (q.mode.x == 3 && c.a < 0.5) discard_fragment();              // a colour-keyed copy (DirectDraw source key)
+    return c;
 }
 // Depth clear helper: writes a constant depth.
 struct ZOut { float4 pos [[position]]; };
