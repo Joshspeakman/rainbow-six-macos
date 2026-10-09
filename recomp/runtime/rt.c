@@ -368,7 +368,7 @@ void rt_bus_unlock(void) { __atomic_clear(&bus_flag, __ATOMIC_RELEASE); }
 
 /* cpuid: an Intel Pentium (P54C) without MMX, so code with CPU-specific paths takes its plain x86/x87 path */
 int rt_cpuid_sse2;                              /* report SSE/SSE2 (games recompiled with tools/sse.py, e.g. Fallout NV) */
-#ifdef DF_EDITION
+#if defined(DF_EDITION) && !defined(R6_EDITION)
 int rt_cpuid_mmx = 1;                           /* report a Pentium MMX (Delta Force requires MMX; tools/sse.py lifts it) */
 #else
 int rt_cpuid_mmx;

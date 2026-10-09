@@ -50,8 +50,85 @@ void w32_reg_string(const char *path, const char *name, const char *str)
  *                   (install.sh --cd-key computes it the way the installer does). The game shows it to GameSpy (now
  *                   OpenSpy) as its CD key for multiplayer; without it multiplayer stops at "Could not find a valid
  *                   CDKey". Only the hash is kept, never the key. */
+/* Persistence (Rainbow Six keeps every option in the registry): the whole tree as text in <data>/registry.txt, one
+ * value per line, "key<TAB>name<TAB>type<TAB>hex bytes", written again after every change */
+static char reg_file[1200];
+static void reg_save_locked(void)
+{
+    if (!*reg_file) return;
+    char tmp[1300]; snprintf(tmp, sizeof tmp, "%s.tmp", reg_file);
+    FILE *f = fopen(tmp, "w"); if (!f) return;
+    for (int k = 0; k < nkeys; k++) {
+        if (!keys[k]->nv) fprintf(f, "%s\t\t-\t\n", keys[k]->path);
+        for (int j = 0; j < keys[k]->nv; j++) {
+            RVal *v = &keys[k]->v[j]; fprintf(f, "%s\t%s\t%u\t", keys[k]->path, v->name, v->type);
+            for (uint32_t b = 0; b < v->size; b++) fprintf(f, "%02x", v->data[b]);
+            fputc('\n', f);
+        }
+    }
+    fclose(f); rename(tmp, reg_file);
+}
+static void reg_load(const char *path)
+{
+    FILE *f = fopen(path, "r"); if (!f) return;
+    char line[8192];
+    while (fgets(line, sizeof line, f)) {
+        char *t1 = strchr(line, '\t'), *t2 = t1 ? strchr(t1 + 1, '\t') : 0, *t3 = t2 ? strchr(t2 + 1, '\t') : 0;
+        if (!t3) continue;
+        *t1 = *t2 = *t3 = 0; char *hex = t3 + 1; size_t hl = strcspn(hex, "\r\n"); hex[hl] = 0;
+        RKey *k = lookup(line, 1); if (!k || !strcmp(t2 + 1, "-")) continue;
+        RVal *v = 0; for (int j = 0; j < k->nv; j++) if (!strcasecmp(k->v[j].name, t1 + 1)) v = &k->v[j];
+        if (!v) { k->v = realloc(k->v, (size_t)(k->nv + 1) * sizeof *k->v); v = &k->v[k->nv++]; memset(v, 0, sizeof *v); snprintf(v->name, sizeof v->name, "%s", t1 + 1); }
+        free(v->data); v->type = (uint32_t)atoi(t2 + 1); v->size = (uint32_t)(hl / 2); v->data = malloc(v->size ? v->size : 1);
+        for (uint32_t b = 0; b < v->size; b++) { unsigned x; sscanf(hex + 2 * b, "%2x", &x); v->data[b] = (uint8_t)x; }
+    }
+    fclose(f);
+}
+static void reg_dword(const char *path, const char *name, uint32_t val)
+{
+    RKey *k = lookup(path, 1); if (!k) return;
+    for (int j = 0; j < k->nv; j++) if (!strcasecmp(k->v[j].name, name)) return;
+    k->v = realloc(k->v, (size_t)(k->nv + 1) * sizeof *k->v); RVal *v = &k->v[k->nv++]; memset(v, 0, sizeof *v);
+    snprintf(v->name, sizeof v->name, "%s", name); v->type = 4; v->size = 4; v->data = malloc(4); memcpy(v->data, &val, 4);
+}
 void w32_registry_install(const char *data_dir)
 {
+#ifdef R6_EDITION
+    /* Rainbow Six: what its installer writes (regs.cmd in the GOG folder), with the virtual game folder; the game adds
+     * every option with its default on the first run. It opens the key for reading and writes into it (Windows 9x
+     * allowed that), which this registry never refuses. */
+    snprintf(reg_file, sizeof reg_file, "%s/registry.txt", data_dir);
+    pthread_mutex_lock(&rlock); reg_load(reg_file); pthread_mutex_unlock(&rlock);
+    {
+        static const char *const r6_paths[][2] = {
+            {"ActorPath", "data\\actor"}, {"BiographyTextPath", "data\\text\\bios"}, {"BitmapPath", "data\\bitmap"},
+            {"BriefingBitmapPath", "data\\shell\\briefing"}, {"BriefingTextPath", "data\\text\\briefing"},
+            {"CursorPath", "data\\shell\\cursor"}, {"DialoguePath", "data\\dialogue"}, {"EquipmentPath", "data\\kit"},
+            {"EquipTextPath", "data\\text\\kit"}, {"FacesPath", "data\\shell\\faces"}, {"FontPath", "data\\font"},
+            {"GamePath", "data\\save"}, {"IconPath", "data\\icon"}, {"IntelBitmapPath", "data\\shell\\intel"},
+            {"IntelTextPath", "data\\text\\intel"}, {"JournalPath", "data\\journals"}, {"MissionPath", "data\\mission"},
+            {"MissionSplashPath", "data\\text\\splash"}, {"MissionTextPath", "data\\text\\mission"}, {"ModelPath", "data\\model"},
+            {"MotionPath", "data\\motion"}, {"PlanPath", "data\\plan"}, {"PlotPath", "data\\plot"},
+            {"ProfileTextPath", "data\\text\\profile"}, {"RosterBitmapPath", "data\\shell\\roster"},
+            {"ShellTextPath", "data\\text\\interface"}, {"TempPath", "data\\temp"}, {"TextPath", "data\\text"},
+            {"TexturePath", "data\\texture"}, {"SoundPath", "data\\sound"}, {"CharacterPath", "data\\character"},
+            {"MapPath", "data\\map"}, {"MissionSplashBMPPath", "data\\Splash"}, {"BriefingSoundPath", "data\\sound"},
+            {"ActionMusicPath", "data\\sound\\music"}, {"VideoPath", "data\\video"}, {"InstallationPath", ""}};
+        const char *key = "hklm\\software\\red storm entertainment\\tom clancy's rainbow six";
+        for (unsigned i = 0; i < sizeof r6_paths / sizeof r6_paths[0]; i++) {
+            char v[512]; snprintf(v, sizeof v, "C:\\GOG Games\\Dungeon Siege\\%s", r6_paths[i][1]);
+            w32_reg_string(key, r6_paths[i][0], v);                   /* always the virtual folder (a moved data folder still works) */
+        }
+        int has = 0; pthread_mutex_lock(&rlock);
+        RKey *k = lookup(key, 1);
+        for (int j = 0; k && j < k->nv; j++) if (!strcasecmp(k->v[j].name, "CDPath")) has = 1;
+        reg_dword(key, "Language", 0);
+        pthread_mutex_unlock(&rlock);
+        if (!has) { w32_reg_string(key, "CDPath", "C:\\"); w32_reg_string(key, "InstallType", "Full"); }
+        w32_reg_string("hklm\\software\\microsoft\\windows\\currentversion\\app paths\\rainbowsix.exe", "Path", "C:\\GOG Games\\Dungeon Siege");
+        pthread_mutex_lock(&rlock); reg_save_locked(); pthread_mutex_unlock(&rlock);
+    }
+#endif
 #ifdef FNV_EDITION
     /* where Fallout NV (and its tools) look for the installation; the virtual game folder is the same for every game */
     w32_reg_string("hklm\\software\\bethesda softworks\\falloutnv", "Installed Path", "C:\\GOG Games\\Dungeon Siege\\");
@@ -152,6 +229,7 @@ IMPL(advapi32, RegSetValueExA)
     for (int j = 0; j < k->nv; j++) if (!strcasecmp(k->v[j].name, n)) v = &k->v[j];
     if (!v) { k->v = realloc(k->v, (size_t)(k->nv + 1) * sizeof *k->v); v = &k->v[k->nv++]; memset(v, 0, sizeof *v); snprintf(v->name, sizeof v->name, "%s", n); }
     free(v->data); v->type = type; v->size = size; v->data = malloc(size ? size : 1); memcpy(v->data, GP(data), size);
+    reg_save_locked();
     pthread_mutex_unlock(&rlock);
     RET(0, 6);
 }
@@ -168,7 +246,7 @@ IMPL(advapi32, RegDeleteValueA)
     const char *n = ARG(1) ? GS(ARG(1)) : "";
     pthread_mutex_lock(&rlock);
     for (int j = 0; j < k->nv; j++) if (!strcasecmp(k->v[j].name, n)) {
-        free(k->v[j].data); k->v[j] = k->v[--k->nv]; pthread_mutex_unlock(&rlock); RET(0, 2);
+        free(k->v[j].data); k->v[j] = k->v[--k->nv]; reg_save_locked(); pthread_mutex_unlock(&rlock); RET(0, 2);
     }
     pthread_mutex_unlock(&rlock); RET(2, 2);
 }

@@ -988,7 +988,7 @@ def main():
     ap.add_argument('--per-file', type=int, default=400)
     ap.add_argument('--imp-base', type=int, default=0, help='index of this image\'s first import in the global import table')
     ap.add_argument('--tag', default='', help='multi-image builds: file name prefix; tables come from tools/link_tables.py')
-    ap.add_argument('--game', default='ds2', choices=('ds2', 'fnv', 'sims', 'df1', 'df2'), help='which executable: HOOKS/OVERRIDES are Dungeon Siege II addresses')
+    ap.add_argument('--game', default='ds2', choices=('ds2', 'fnv', 'sims', 'df1', 'df2', 'r6'), help='which executable: HOOKS/OVERRIDES are Dungeon Siege II addresses')
     a = ap.parse_args()
     L = Lifter(a.exe, a.analysis); L.jt_cache = {}
     L.imp_index = {va: a.imp_base + k for k, (va, _) in enumerate(L.imports)}
@@ -999,8 +999,8 @@ def main():
     L.overrides = {} if a.tag else dict(OVERRIDES)
     if not a.tag:
         from editions import identify, PROFILES
-        edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2') else identify(a.exe, prepared=True)
-        if edition in ('fnv', 'sims', 'df1', 'df2'):              # Fallout: New Vegas, The Sims, Delta Force: none of the DS2 hooks apply
+        edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2', 'r6') else identify(a.exe, prepared=True)
+        if edition in ('fnv', 'sims', 'df1', 'df2', 'r6'):        # Fallout: New Vegas, The Sims, Delta Force, Rainbow Six: none of the DS2 hooks apply
             L.hooks = {}; L.overrides = {}
         if edition == 'sims':
             L.overrides = {0x467020: 'crash reporting (crashpad): not started'}
@@ -1015,7 +1015,7 @@ def main():
     os.makedirs(a.outdir, exist_ok=True)
     pre = a.tag + '_' if a.tag else ''
     L.smc = {}
-    if not a.tag and edition in ('df1', 'df2') and not a.only:
+    if not a.tag and edition in ('df1', 'df2', 'r6') and not a.only:
         every = {}
         for fn in sorted(L.funcs): every.update(L.collect(fn))
         L.slots = L.find_slots(every); L.cache.clear()

@@ -12,6 +12,8 @@ DF2_STEAM = '13ca058db64c360e8db1bfec1cbb4b28fa67a970acb049c8b71117233c364566'  
 PROFILES = {
     'df1': dict(name='Delta Force (Steam build 19311)', sha256=DF1_STEAM, hooks=(), overrides=()),
     'df2': dict(name='Delta Force 2 (Steam build 19312)', sha256=DF2_STEAM, hooks=(), overrides=()),
+    # Rainbow Six (GOG 1.04, or that executable with a mod patched in): accepted by file name, not pinned (build_r6.sh)
+    'r6': dict(name='Rainbow Six (GOG 1.04 or a patched RainbowSix.exe)', sha256=None, hooks=(), overrides=()),
     'sims': dict(name='The Sims Legacy Collection (Steam build 17905164)', sha256=SIMS_STEAM, hooks=(), overrides=()),
     'fnv': dict(name='Fallout: New Vegas GOG 1.4.0.525', sha256=FNV_GOG, hooks=(), overrides=()),
     'gog': dict(name='GOG 2.3', sha256=GOG_23, hooks=(0x544df0, 0x544ee5, 0x90a076),
@@ -28,6 +30,8 @@ def digest(path):
 
 def identify(path, prepared=False):
     path = Path(path)
+    if path.name.lower() == 'rainbowsix.exe':
+        return 'r6'
     sha = digest(path)
     for key, profile in PROFILES.items():
         if sha == profile['sha256']:

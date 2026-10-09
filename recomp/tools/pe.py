@@ -59,10 +59,12 @@ def code_range(pe):
     (Mss32.dll keeps its hand-written mixers in a second one, MSSMIXER), with the gaps between them zero-filled."""
     t = pe.section('.text')
     is_dll = struct.unpack_from('<H', pe.data, struct.unpack_from('<I', pe.data, 0x3c)[0] + 22)[0] & 0x2000
-    if not is_dll and t and not pe.section('_TEXT') and not pe.section('.rld'): return t[1], t[1] + t[2], pe.bytes_at(t[1], t[2])
+    ex = [s for s in pe.sections if s[5] & 0x20000000 and s[0] != '.bind']
+    if not is_dll and t and len(ex) == 1 and not pe.section('.rld'): return t[1], t[1] + t[2], pe.bytes_at(t[1], t[2])
     if not is_dll and not pe.section('.rld'):
-        # Delta Force: Watcom's code section is AUTO; DF2 adds MASM's _text and _TEXT after .text. Every executable
-        # section but the Steam wrapper's .bind, gaps filled with int3.
+        # Delta Force: Watcom's code section is AUTO; DF2 adds MASM's _text and _TEXT after .text. Rainbow Six with a
+        # mod patched in: an extra executable section after .rsrc (hooks jump into it). Every executable section but
+        # the Steam wrapper's .bind, gaps (other sections' address ranges included) filled with int3.
         ex = [s for s in pe.sections if s[5] & 0x20000000 and s[0] != '.bind']
         lo, hi = min(s[1] for s in ex), max(s[1] + s[2] for s in ex)
         buf = bytearray(b'\xcc' * (hi - lo))

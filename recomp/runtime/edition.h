@@ -3,8 +3,16 @@
 #define DS2_EDITION_H
 #ifdef DF_EDITION
 /* Delta Force (Steam 32620, build 19311) and Delta Force 2 (Steam 32630, build 19312), unwrapped by
- * tools/steamstub21.py: software renderers on DirectDraw; no Dungeon Siege hooks */
-#ifdef DF2_EDITION
+ * tools/steamstub21.py: software renderers on DirectDraw; no Dungeon Siege hooks.
+ * Rainbow Six (GOG 1.04, R6_EDITION) is built with DF_EDITION too: the same DirectDraw-era behaviour (its own
+ * settings, mouse messages in client coordinates, input to the newest main window). Its executable is not pinned (a
+ * patched RainbowSix.exe with an extra code section works the same), so the image end is generous. */
+#ifdef R6_EDITION
+#define DS2_IMAGE_END 0x01000000u
+#define DS2_TITLE "Rainbow Six"
+#define DS2_DOCUMENTS "Rainbow Six"
+#define GAME_EXE "RainbowSix.exe"
+#elif defined(DF2_EDITION)
 #define DS2_IMAGE_END 0x00e69000u
 #define DS2_TITLE "Delta Force 2"
 #define DS2_DOCUMENTS "Delta Force 2"
