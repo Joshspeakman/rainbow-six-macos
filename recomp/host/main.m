@@ -128,6 +128,7 @@ typedef struct { uint32_t frame; double at; char kind[8]; int x, y; char path[51
 static Act acts[256]; static int nacts;
 static double vcur_x, vcur_y;          // virtual cursor in game (display mode) pixels
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
+static uint32_t buttons;               // MK_ flags (defined with the input below)
 static void rel_motion(double gx, double gy);   /* relative motion in game pixels, the real-input path */
 static uint32_t pos_lp(void);
 static void parse_script(void)
@@ -199,8 +200,8 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
         if (!strcmp(a->kind, "click") || !strcmp(a->kind, "rclick")) {
             int r = a->kind[0] == 'r';
             if (fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
-            if (fno == a->frame + 20) post(r ? 0x204 : 0x201, r ? 2 : 1, pos_lp());
-            if (fno == a->frame + 24) post(r ? 0x205 : 0x202, 0, pos_lp());
+            if (fno == a->frame + 20) { w32_keys[r ? 2 : 1] = 0x80; buttons |= r ? 2 : 1; post(r ? 0x204 : 0x201, r ? 2 : 1, pos_lp()); }
+            if (fno == a->frame + 24) { w32_keys[r ? 2 : 1] = 0; buttons &= ~(r ? 2u : 1u); post(r ? 0x205 : 0x202, 0, pos_lp()); }
         } else if (!strcmp(a->kind, "press")) {           /* press:x,y: the left button pressed and held (until a later click) */
             if (fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
             if (fno == a->frame + 20) post(0x201, 1, pos_lp());
@@ -455,7 +456,7 @@ static void type_text(NSString *text)
 @interface AppDelegate : NSObject <NSApplicationDelegate> @end
 @implementation AppDelegate
 - (void)applicationDidBecomeActive:(NSNotification *)n { (void)n; if (win.visible) capture(1); post(0x1c, 1, 0); }
-- (void)applicationDidResignActive:(NSNotification *)n { (void)n; capture(0); post(0x1c, 0, 0); }
+- (void)applicationDidResignActive:(NSNotification *)n { (void)n; capture(0); if (!test_mode) post(0x1c, 0, 0); }   // test mode runs in the background: the game stays active
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s { (void)s; return NSTerminateNow; }
 @end
 
