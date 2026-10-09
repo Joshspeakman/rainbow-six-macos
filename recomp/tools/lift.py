@@ -245,7 +245,10 @@ class Lifter:
         fields = self.smc[i.address]; raw = bytearray(i.bytes)
         if (i.mnemonic in ('call', 'jmp') or i.mnemonic.startswith('j') or i.mnemonic.startswith('loop')) and not (
                 i.mnemonic in ('call', 'jmp') and i.operands[0].type == X.X86_OP_MEM):
-            raise Unsupported('smc branch')                  # (an indirect call through a patched address is fine)
+            # a branch whose displacement a "store" covers: in practice data decoded as code (Rainbow Six's co-op mod
+            # strings read as `and [0x732578], ah`, over the CRT's jmp at 0x732575); lifted as written, not refused
+            print('smc: branch at 0x%x lifted as written (a store covers field %s)' % (i.address, ', '.join('0x%x' % fa for fa, _, _ in fields)))
+            return self.emit(i, f, insns, callees)           # (an indirect call through a patched address is fine)
         def decode(b):
             d = next(self.md.disasm(bytes(b), i.address, 1), None)
             if d is None or d.size != i.size: raise Unsupported('smc re-encode')
