@@ -1,5 +1,9 @@
 #!/bin/bash
-# install.sh --game-dir <Delta Force or Delta Force 2 folder> [--app-dir DIR] [--data-dir DIR]
+# install.sh --game-dir <Rainbow Six, Delta Force or Delta Force 2 folder> [--app-dir DIR] [--data-dir DIR]
+#
+# Rainbow Six (GOG 1.04, or its RainbowSix.exe with the co-op mod patched in): "Rainbow Six.app" on macOS, the
+# launcher rainbow-six on Linux; data in ~/Games/RainbowSixNative. The folder needs RainbowSix.exe, SMACKW32.DLL,
+# data/ and MUSIC/ (docs/R6-PORT.md).
 #
 # Builds the natively recompiled Delta Force (Steam app 32620) or Delta Force 2 (Steam app 32630) from your own Steam
 # copy and installs it: on macOS "Delta Force.app" / "Delta Force 2.app" (default in ~/Applications), on Linux a
@@ -20,12 +24,14 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$GAME" ] || { echo "usage: install.sh --game-dir <the Steam Delta Force or Delta Force 2 folder>"; exit 1; }
 GAME="$(cd "$GAME" && pwd)"
-if [ -f "$GAME/Df2.exe" ]; then G=df2; EXE=Df2.exe; NAME="Delta Force 2"; BIN=DeltaForce2; ID=delta-force-2
+BUILD=build_df.sh
+if [ -f "$GAME/RainbowSix.exe" ]; then G=r6; EXE=RainbowSix.exe; NAME="Rainbow Six"; BIN=RainbowSix; ID=rainbow-six; BUILD=build_r6.sh
+elif [ -f "$GAME/Df2.exe" ]; then G=df2; EXE=Df2.exe; NAME="Delta Force 2"; BIN=DeltaForce2; ID=delta-force-2
 elif [ -f "$GAME/Df.exe" ]; then G=df1; EXE=Df.exe; NAME="Delta Force"; BIN=DeltaForce; ID=delta-force
-else echo "$GAME has neither Df.exe nor Df2.exe"; exit 1; fi
+else echo "$GAME has neither RainbowSix.exe, Df.exe nor Df2.exe"; exit 1; fi
 DATA="${DATA:-$HOME/Games/${BIN}Native}"; mkdir -p "$DATA"
 echo "== recompiling $NAME from $GAME (a few minutes)"
-"$HERE/recomp/build_df.sh" "$GAME" "$HERE/recomp/work/$G"
+"$HERE/recomp/$BUILD" "$GAME" "$HERE/recomp/work/$G"
 OUT="$HERE/recomp/work/$G"
 Q_GAME=$(printf '%q' "$GAME"); Q_DATA=$(printf '%q' "$DATA")      # shell-quoted: any folder name is only data
 

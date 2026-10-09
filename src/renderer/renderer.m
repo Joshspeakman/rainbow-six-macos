@@ -267,7 +267,7 @@ static void quad(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t sr
     if (fill == 2) { q.src[0] = srect[0] / 256.0f; q.src[1] = srect[1] / 256.0f; q.src[2] = srect[2] / 256.0f; q.src[3] = srect[3] / 256.0f; }
     else if (s) { float sw = s->w, sh = s->h; q.src[0] = srect[0] / sw; q.src[1] = srect[1] / sh; q.src[2] = srect[2] / sw; q.src[3] = srect[3] / sh; }
     q.color[0] = ((color >> 16) & 255) / 255.0f; q.color[1] = ((color >> 8) & 255) / 255.0f; q.color[2] = (color & 255) / 255.0f; q.color[3] = ((color >> 24) & 255) / 255.0f;
-    q.mode[0] = fill == 1;
+    q.mode[0] = fill == 1 ? 1 : fill == 3 ? 3 : 0;                       /* 3: a colour-keyed copy (alpha 0 texels discarded) */
     id<MTLRenderCommandEncoder> e = enc_for(r, dst, 0); if (!e) return;
     [e setRenderPipelineState:fill == 2 ? r->quad_over_pso : r->quad_pso]; [e setDepthStencilState:r->nodepth_ds]; [e setCullMode:MTLCullModeNone];
     [e setViewport:(MTLViewport){0, 0, d->w, d->h, 0, 1}];
@@ -702,7 +702,7 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_DEPTH_UPLOAD: if (size >= 12) depth_upload(r, p, size); break;
     case DSR_READBACK: readback(r, p); break;
     case DSR_BLT: { int32_t dr[4], sr[4]; memcpy(dr, p + 1, 16); memcpy(sr, p + 6, 16);
-                    if (p[5]) quad(r, p[0], dr, p[5], sr, 0, 0); else if (!(p[10] & 0x20000)) quad(r, p[0], dr, 0, dr, 1, p[11]); } break;
+                    if (p[5]) quad(r, p[0], dr, p[5], sr, (p[10] & 0x18000) ? 3 : 0, 0); else   /* DDBLT_KEYSRC(OVERRIDE): keyed texels left out */ if (!(p[10] & 0x20000)) quad(r, p[0], dr, 0, dr, 1, p[11]); } break;
     case DSR_PRESENT: r->presented = p[0]; dsr_frame++;   // caller presents/commits
         { static int glow = -1; if (glow < 0) glow = getenv("DSR_GLOWLOG") != 0;   // development: effect targets in the corner
           if (glow) { int x = 0; for (uint32_t id = 1; id < MAXSURF && x < 5 * 260; id++) if (r->s[id].used && r->s[id].fxrt) {

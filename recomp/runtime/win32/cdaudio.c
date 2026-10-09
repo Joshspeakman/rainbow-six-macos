@@ -80,6 +80,8 @@ static void render(void *u, void *buffer, uint32_t frames)
         if (!cd_playing) notify_done_locked();
     }
     pthread_mutex_unlock(&cd_lock);
+    if (cd_log()) { static float pk; static uint32_t n; for (uint32_t i = 0; i < 2 * frames; i++) if (fabsf(out[i]) > pk) pk = fabsf(out[i]);
+                    if ((n += frames) >= OUT_RATE) { fprintf(stderr, "cdaudio: peak %.3f\n", pk); n = 0; pk = 0; } }
     if (getenv("W32_AUDIO_MUTE")) memset(out, 0, frames * 8);
 }
 static int track_of(uint32_t v) { return cd_format == 10 ? (int)(v & 0xff) : 0; }   /* TMSF: the track in the low byte */
