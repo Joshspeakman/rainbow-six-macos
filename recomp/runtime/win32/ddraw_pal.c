@@ -10,6 +10,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
+#include <dlfcn.h>
 #include "../../../src/dsr/dsr_proto.h"
 
 uint32_t *cmd_begin(uint32_t op, uint32_t payload);   /* ddraw.c: the command ring to the renderer */
@@ -77,6 +78,7 @@ struct PSurf {
     uint32_t gid, g_tex; int gkind;                  /* gkind: 1 render target, 2 depth, 3 texture, 4 offscreen */
     int gpu_newer;                                   /* drawn into on the GPU since the CPU copy was last read back */
     PSurf *zbuf;                                     /* an attached depth buffer */
+    uint64_t src_hash; int src_hashed;               /* a blit source: what its GPU copy was made from (src_sync) */
 };
 enum { T_DD = 1, T_SURF, T_PAL, T_CLIP, T_GAMMA, T_D3D, T_DEV, T_VP, T_TEX, T_VB, T_MAT, T_LIGHT };
 typedef struct { int type; void *p; } Obj;
@@ -283,11 +285,20 @@ static void gpu_upload(PSurf *s)
         cmd_end(); s->gpu_newer = 0; return;
     }
     if (!s->gid) return;
+    if (getenv("W32_DBG_UPLOADS")) {   /* development: uploads per second by surface */
+        static struct { uint32_t w, h, kind, caps, n; void *ret; } u[2048]; static int nu; static uint64_t t0; static long total;
+        void *ra = __builtin_return_address(0); int k = 0; while (k < nu && !(u[k].w == s->w && u[k].h == s->h && u[k].kind == (uint32_t)s->gkind && u[k].ret == ra)) k++;
+        if (k == nu && nu < 2048) { u[nu].w = s->w; u[nu].h = s->h; u[nu].kind = (uint32_t)s->gkind; u[nu].caps = s->caps; u[nu].ret = ra; u[nu].n = 0; nu++; }
+        if (k < 2048) u[k].n++; total += (long)s->w * s->h;
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); uint64_t t = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+        if (!t0) t0 = t;
+        if (t - t0 >= 5000) { fprintf(stderr, "uploads/5s: %ld Mpixel\n", total / 1000000); for (int j = 0; j < nu; j++) if (u[j].n) { Dl_info di; const char *fn = dladdr(u[j].ret, &di) && di.dli_sname ? di.dli_sname : "?"; fprintf(stderr, "  %ux%u kind %u caps %x from %s+%ld: %u\n", u[j].w, u[j].h, u[j].kind, u[j].caps, fn, (long)((char *)u[j].ret - (char *)di.dli_saddr), u[j].n); u[j].n = 0; } t0 = t; total = 0; }
+    }
     uint32_t *p = cmd_begin(DSR_SURFACE_UPLOAD, 24 + s->w * s->h * 4);
     p[0] = s->gid; p[1] = 0; p[2] = 0; p[3] = s->w; p[4] = s->h; p[5] = s->w * 4;
     surf_to_bgra(s, p + 6);
     if (s->gkind == 3 && smooth_textures()) bleed_edges(p + 6, s->w, s->h);
-    cmd_end(); s->gpu_newer = 0;
+    cmd_end(); s->gpu_newer = 0; s->src_hashed = 0;                 /* src_sync records what this upload was made from */
 }
 /* the GPU's pixels back into the CPU copy (a render target the game locks), in the surface's own format */
 static void gpu_readback(PSurf *s)
@@ -422,14 +433,39 @@ static void shown_after_copy(Ctx *c, PSurf *d, const int32_t *dr)
     if (!visible_of(d) || d->back) return;
     show(c, d, (uint32_t)dr[0], (uint32_t)dr[1], (uint32_t)(dr[2] - dr[0]), (uint32_t)(dr[3] - dr[1]));
 }
+/* A blit source's GPU copy, current: uploaded when first used, and after that only when what the conversion reads (its
+ * pixels, palette, colour key) changed. Rainbow Six draws its HUD map with dozens of small blits from one 155x101
+ * surface a frame; converting and uploading the whole surface for each was most of the game thread's time. A source the
+ * GPU drew into is read back, after which both copies already agree. */
+static uint64_t src_hash_of(const PSurf *s)
+{
+    uint64_t h = 0x9e3779b97f4a7c15ull ^ ((uint64_t)s->ck_lo << 32 | s->ck_hi) ^ (uint64_t)s->has_ck << 63;
+    uint32_t row = s->w * (s->bpp / 8);
+    for (uint32_t y = 0; y < s->h; y++) {
+        const uint8_t *r = G_MEM + s->mem + y * s->pitch; uint32_t x = 0; uint64_t v;
+        for (; x + 8 <= row; x += 8) { memcpy(&v, r + x, 8); h = (h ^ v) * 0x100000001b3ull; h ^= h >> 29; }
+        for (; x < row; x++) { h = (h ^ r[x]) * 0x100000001b3ull; h ^= h >> 29; }
+    }
+    if (s->bpp == 8 && s->pal) for (int k = 0; k < 256; k++) { h = (h ^ s->pal->entries[k]) * 0x100000001b3ull; h ^= h >> 29; }
+    return h;
+}
+static int src_always(void) { static int v = -1; if (v < 0) v = getenv("W32_SRC_ALWAYS_UPLOAD") != 0; return v; }   /* the old behaviour, for comparisons */
+static void src_sync(PSurf *src)
+{
+    int off = src_always();
+    if (!src->gid) { gpu_attach(src, 4); gpu_upload(src); src->src_hash = src_hash_of(src); src->src_hashed = 1; return; }
+    if (off) { gpu_readback(src); gpu_upload(src); return; }
+    if (src->gpu_newer) { gpu_readback(src); src->src_hash = src_hash_of(src); src->src_hashed = 1; return; }   /* now equal */
+    uint64_t h = src_hash_of(src);
+    if (!src->src_hashed || h != src->src_hash) { gpu_upload(src); src->src_hash = h; src->src_hashed = 1; }
+}
 M(s_Blt, 6) ME(PSurf, T_SURF)                                       /* (dst rect, src, src rect, flags, DDBLTFX *) */
     PSurf *src = the(ARG(2), T_SURF); uint32_t flags = ARG(4), fx = ARG(5);
     int32_t dr[4], sr[4]; rect_in(ARG(1), me, dr);
     if (me->gid && (me->gkind == 1 || me->gkind == 2)) {             /* onto a render target: done on the GPU */
         { static int n; if (n++ < 8) dlog("Blt onto GPU %u (%ux%u caps %x) from %s %ux%u flags %x", me->gid, me->w, me->h, me->caps, src ? (src->gid ? "GPU" : "CPU") : "fill", src ? src->w : 0, src ? src->h : 0, flags); }
         if (src) rect_in(ARG(3), src, sr);
-        if (src && !src->gid) { gpu_attach(src, 4); gpu_upload(src); }
-        else if (src) gpu_readback(src), gpu_upload(src);
+        if (src) src_sync(src);
         uint32_t fill = 0;
         if (flags & DDBLT_COLORFILL) { uint32_t v = fx ? rt_r32(G_MEM, fx + 80) : 0; fill = 0xff000000u | chan(v, me->pf[4]) << 16 | chan(v, me->pf[5]) << 8 | chan(v, me->pf[6]); }
         uint32_t *p = cmd_begin(DSR_BLT, 48); p[0] = me->gid; memcpy(p + 1, dr, 16); p[5] = src ? src->gid : 0;
@@ -456,7 +492,8 @@ M(s_Blt, 6) ME(PSurf, T_SURF)                                       /* (dst rect
         dr[0] = sr[0] - ox; dr[1] = sr[1] - oy; dr[2] = sr[2] - ox; dr[3] = sr[3] - oy;
     } else if (!clip_to(dr, me) || !clip_to(sr, src)) RET(DD_OK, 6);
     copy_rect(me, dr, src, sr, key, klo, khi);
-    if (me->gid) gpu_upload(me);                                      /* a texture filled by copying */
+    if (me->gid && me->gkind == 4 && !src_always()) me->src_hashed = 0;   /* a blit source: uploaded when next used (src_sync), not per blit */
+    else if (me->gid) gpu_upload(me);                                 /* a texture filled by copying */
     shown_after_copy(c, me, dr); RET(DD_OK, 6);
 END
 M(s_BltFast, 6) ME(PSurf, T_SURF)                                   /* (x, y, src, src rect, trans) */
@@ -465,7 +502,7 @@ M(s_BltFast, 6) ME(PSurf, T_SURF)                                   /* (x, y, sr
     int32_t x = (int32_t)ARG(1), y = (int32_t)ARG(2);
     int32_t dr[4] = {x, y, x + sr[2] - sr[0], y + sr[3] - sr[1]}, ox = sr[0] - dr[0], oy = sr[1] - dr[1];
     if (me->gid && me->gkind == 1) {                                  /* onto a render target (Rainbow Six's cursor and menus): on the GPU, as Blt */
-        if (!src->gid) { gpu_attach(src, 4); gpu_upload(src); } else gpu_readback(src), gpu_upload(src);
+        src_sync(src);
         uint32_t *p = cmd_begin(DSR_BLT, 48); p[0] = me->gid; memcpy(p + 1, dr, 16); p[5] = src->gid; memcpy(p + 6, sr, 16);
         p[10] = (ARG(5) & DDBLTFAST_SRCCOLORKEY) && src->has_ck ? DDBLT_KEYSRC : 0; p[11] = 0; cmd_end();
         me->gpu_newer = 1; RET(DD_OK, 6);
@@ -476,7 +513,8 @@ M(s_BltFast, 6) ME(PSurf, T_SURF)                                   /* (x, y, sr
     dr[0] = sr[0] - ox; dr[1] = sr[1] - oy; dr[2] = sr[2] - ox; dr[3] = sr[3] - oy;
     int key = (ARG(5) & DDBLTFAST_SRCCOLORKEY) && src->has_ck;
     gpu_readback(src); copy_rect(me, dr, src, sr, key, src->ck_lo, src->ck_hi);
-    if (me->gid) gpu_upload(me);
+    if (me->gid && me->gkind == 4 && !src_always()) me->src_hashed = 0;   /* as Blt */
+    else if (me->gid) gpu_upload(me);
     shown_after_copy(c, me, dr); RET(DD_OK, 6);
 END
 M(s_Flip, 3) ME(PSurf, T_SURF)                                      /* (target override, flags): the back buffer becomes visible */
@@ -541,6 +579,8 @@ END
 M(s_Unlock, 2) ME(PSurf, T_SURF)
     if (me->locked) me->locked--;
     if (me->gid) {                                                    /* a texture or render target: the GPU's copy follows */
+        if (me->gkind == 4 && !src_always()) { me->src_hashed = 0; RET(DD_OK, 2); }    /* a blit source: uploaded when next blitted (src_sync); the HUD
+                                                                       * map is locked thousands of times a second */
         gpu_upload(me);
         if (visible_of(me) && !me->back) { ddraw_pal_frames++; dsr_present(c, me->gid); }   /* drawn straight onto a single primary (cutscenes) */
         RET(DD_OK, 2);
