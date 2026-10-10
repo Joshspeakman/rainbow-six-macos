@@ -7,7 +7,7 @@
 // Everything is written, on Play only, where the game reads it: options in <data>/registry.txt (the runtime's registry:
 // key<TAB>name<TAB>type<TAB>hex), controls in <data>/game/sherman.kmp. The rows, actions, key names and the layouts
 // come from r6coop-launcher.json, which the mod ships next to its RainbowSix.exe (shared with the Windows and Linux
-// launchers); without it the window shows only the Mac's own row (Frame Rate, in <data>/launcher.plist). The banner
+// launchers); without it the window has only Quit and Play (and the game its own Options screen). The banner
 // is <game>/data/bitmap/mm_bg.RSB from the player's own copy.
 #import <AppKit/AppKit.h>
 #include "../runtime/edition.h"
@@ -152,7 +152,7 @@ static NSInteger choice_index(NSString *rid)
         return (NSInteger)ch.count - 1;
     }
     NSString *v = values[rid] ?: @"";
-    for (NSUInteger i = 0; i < ch.count; i++) if ([str(ch[i][@"value"]) caseInsensitiveCompare:v] == NSOrderedSame) return (NSInteger)i;
+    for (NSUInteger i = 0; i < ch.count; i++) { NSString *c = str(dict(ch[i])[@"value"]); if (c && [c caseInsensitiveCompare:v] == NSOrderedSame) return (NSInteger)i; }
     double x, c0, best = INFINITY; NSInteger bi = -1;
     if (ch.count && number(v, &x) && number(str(ch[0][@"value"]), &c0))   /* decimals (volumes, brightness, mouse speed): the nearest step */
         for (NSUInteger i = 0; i < ch.count; i++) { double c; if (number(str(ch[i][@"value"]), &c) && fabs(c - x) < best) { best = fabs(c - x); bi = (NSInteger)i; } }
@@ -185,21 +185,48 @@ static void cycle(NSString *rid, NSInteger d)
     values[rid] = str(ch[i][@"value"]) ?: @"";
 }
 
-/* the Mac's own row: the frame cadence (DSR_FPSCAP, read by ddraw.c: unset is its automatic 120 or 60) */
-static NSInteger display_hz(void) { NSInteger hz = NSScreen.mainScreen.maximumFramesPerSecond; return hz > 0 ? hz : 60; }
-static NSDictionary *framerate_row(void)
+/* a "modes" row (Mission Resolution) also offers this display's own sizes, the ones main.m gives the game's mode list
+ * (DS_DISPLAY_MODES: its pixels, then on a MacBook with a notch the 16:10 area below it); the host shows any size
+ * letterboxed. Sorted by width, then height, as the Linux launcher. */
+static void add_modes(void)
 {
-    NSMutableArray *c = [NSMutableArray arrayWithObjects:@{@"value": @"auto", @"label": @"Automatic", @"note": @"120 or 60 FPS, from the game's own work per frame"},
-                                                         @{@"value": @"60", @"label": @"60 FPS", @"note": @"Steady 60; cooler and quieter"}, nil];
-    if (display_hz() > 60) [c addObject:@{@"value": @"display", @"label": [NSString stringWithFormat:@"Display (%ld FPS)", (long)display_hz()], @"note": @"As fast as this display refreshes"}];
-    return @{@"id": @"mac_fps", @"label": @"Frame Rate", @"note": @"", @"type": @"choice", @"plist": @"frameRate", @"default": @"auto", @"choices": c};
+    NSMutableArray *sizes = [NSMutableArray array]; const char *e = getenv("DS_DISPLAY_MODES");
+    for (NSString *m in e ? [@(e) componentsSeparatedByString:@","] : @[]) {
+        NSArray *p = [m componentsSeparatedByString:@"x"]; if (p.count != 2) continue;
+        [sizes addObject:@[@([p[0] intValue]), @([p[1] intValue]), sizes.count ? @"This display, below the notch" : @"This display"]];
+    }
+    for (NSString *rid in row_order) {
+        if (![rows[rid][@"modes"] boolValue]) continue;
+        NSMutableArray *ch = [choices(rid) mutableCopy];
+        for (NSArray *z in sizes) {
+            long w = [z[0] longValue], h = [z[1] longValue]; NSString *v = [NSString stringWithFormat:@"%ldx%ld", w, h];
+            if (w < 640 || h < 480 || w > 8192 || h > 8192) continue;
+            BOOL have = NO; for (NSDictionary *c in ch) if ([str(dict(c)[@"value"]) isEqualToString:v]) have = YES;
+            if (!have) [ch addObject:@{@"value": v, @"label": [NSString stringWithFormat:@"%ld x %ld", w, h], @"note": z[2]}];
+        }
+        [ch sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            NSArray *pa = [str(dict(a)[@"value"]) componentsSeparatedByString:@"x"], *pb = [str(dict(b)[@"value"]) componentsSeparatedByString:@"x"];
+            long aw = pa.count == 2 ? [pa[0] intValue] : 0, ah = pa.count == 2 ? [pa[1] intValue] : 0, bw = pb.count == 2 ? [pb[0] intValue] : 0, bh = pb.count == 2 ? [pb[1] intValue] : 0;
+            return aw != bw ? (aw < bw ? NSOrderedAscending : NSOrderedDescending) : ah != bh ? (ah < bh ? NSOrderedAscending : NSOrderedDescending) : NSOrderedSame;
+        }];
+        NSMutableDictionary *r = [rows[rid] mutableCopy]; r[@"choices"] = ch; rows[rid] = r;
+    }
 }
-/* the Mac rows as environment for the runtime; an environment the player set already (a terminal) wins */
-static void apply(NSString *fps)
+/* the settings the host reads, as environment (before main.m makes the Metal layer and the game starts): Frame Rate
+ * (R6CoopFrameRate; the mod leaves pacing to the host) as DSR_FPSCAP, 0 the host's own, 1000 unlimited without vsync;
+ * Screen (FullScreen; the game itself always draws full screen natively) as DS_WINDOW_MODE. One the player set
+ * already (a terminal) wins. */
+static NSString *value_of_reg(NSString *reg)
 {
-    if (getenv("DSR_FPSCAP")) return;
-    if ([fps isEqualToString:@"60"]) setenv("DSR_FPSCAP", "60", 1);
-    else if ([fps isEqualToString:@"display"]) setenv("DSR_FPSCAP", [NSString stringWithFormat:@"%ld", (long)display_hz()].UTF8String, 1);
+    for (NSString *rid in row_order) { NSString *r = str(rows[rid][@"reg"]); if (r && [r caseInsensitiveCompare:reg] == NSOrderedSame) return values[rid]; }   /* (nil compares as the same) */
+    return nil;
+}
+static void apply(void)
+{
+    NSString *fps = value_of_reg(@"R6CoopFrameRate"), *full = value_of_reg(@"FullScreen");
+    if ([fps isEqualToString:@"1000"]) { setenv("DSR_FPSCAP", "0", 0); setenv("DSR_VSYNC", "0", 0); }   /* overwrite 0: the player's stays */
+    else if (fps.intValue > 0) setenv("DSR_FPSCAP", [NSString stringWithFormat:@"%d", fps.intValue].UTF8String, 0);
+    if (full) setenv("DS_WINDOW_MODE", [full caseInsensitiveCompare:@"FALSE"] == NSOrderedSame ? "windowed" : "fullscreen", 0);
 }
 
 /* reads r6coop-launcher.json: the game folder's, else a copy in the app; NO when there is none (or it can't be read) */
@@ -395,7 +422,7 @@ static void fill(NSRect r, NSColor *c) { [c setFill]; NSRectFill(r); }
                       F_SMALL, NOTE, NSMakeRect(r.origin.x + 14, r.origin.y + 30, r.size.width - 28, 18), NSTextAlignmentLeft);
         }
         if (!have_spec) draw_text(@"No r6coop-launcher.json next to RainbowSix.exe: the game's own Options screen has its settings.", F_SMALL, NOTE,
-                                  NSMakeRect(ROW_X, NSMaxY([self groupRect:(NSInteger)groups.count - 1]) + 14, ROW_W, 18), NSTextAlignmentLeft);
+                                  NSMakeRect(ROW_X, groups.count ? NSMaxY([self groupRect:(NSInteger)groups.count - 1]) + 14 : BANNER + 30, ROW_W, 18), NSTextAlignmentLeft);
     }
     [self drawButton:self.quitRect title:self.open >= 0 ? @"BACK" : @"QUIT" primary:NO hot:self.hover == HIT_QUIT];
     [self drawButton:self.playRect title:@"PLAY" primary:YES hot:self.hover == HIT_PLAY];
@@ -525,7 +552,7 @@ static void fill(NSRect r, NSColor *c) { [c setFill]; NSRectFill(r); }
 
 // ---------------------------------------------------------------- the window
 /* Play: every option into registry.txt (only the game's key's values the spec names are replaced or added), the whole
- * key map into sherman.kmp, the Mac's rows into launcher.plist. NO (and why) if a file couldn't be written. */
+ * key map into sherman.kmp. NO (and why) if a file couldn't be written. */
 static BOOL save_all(NSString *data, NSString *kmpName, NSString **why)
 {
     NSString *regPath = [data stringByAppendingPathComponent:@"registry.txt"]; NSError *err = nil;
@@ -541,16 +568,13 @@ static BOOL save_all(NSString *data, NSString *kmpName, NSString **why)
             }
         }
     }
-    NSMutableDictionary *pl = [[NSDictionary dictionaryWithContentsOfFile:[data stringByAppendingPathComponent:@"launcher.plist"]] ?: @{} mutableCopy];
-    for (NSString *rid in rows) if (str(rows[rid][@"plist"])) pl[rows[rid][@"plist"]] = values[rid] ?: @"";
-    [pl writeToFile:[data stringByAppendingPathComponent:@"launcher.plist"] atomically:YES];
     return YES;
 }
 
 /* Shows the launch window (modal) unless DS_NO_LAUNCHER is set; returns 0 to quit. DS_LAUNCHER_SHOT=<png> renders it
  * to an image instead (development): DS_LAUNCHER_OPEN=<group title> with that group's panel open, DS_LAUNCHER_PICK=<
  * layout> that layout chosen, DS_LAUNCHER_SET="id=value;..." those values, DS_LAUNCHER_BIND=<n> action n waiting for a
- * key (DS_LAUNCHER_KEY=<Mac key code> then presses one); DS_LAUNCHER_APPLY=1 then writes the files as Play would (without starting the game). */
+ * key (DS_LAUNCHER_KEY=<Mac key code> then presses one), DS_LAUNCHER_ROWS=1 prints every row's choices; DS_LAUNCHER_APPLY=1 then writes the files as Play would (without starting the game). */
 int ds_launcher_run(const char *game_dir, const char *data_dir)
 {
     NSString *game = @(game_dir), *data = @(data_dir);
@@ -558,26 +582,16 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     key_names = [NSMutableDictionary dictionary]; vk_to_code = [NSMutableDictionary dictionary];
     row_order = [NSMutableArray array]; top_ids = @[]; groups = @[]; actions = @[]; mouse = @{}; version = @""; kmp_file = @"sherman.kmp";
     @try { have_spec = load_spec(game); }
-    @catch (NSException *x) { (void)x; have_spec = NO; [rows removeAllObjects]; [row_order removeAllObjects]; [layouts removeAllObjects]; top_ids = @[]; groups = @[]; actions = @[]; }   /* a malformed spec: the Mac's rows only */
+    @catch (NSException *x) { (void)x; have_spec = NO; [rows removeAllObjects]; [row_order removeAllObjects]; [layouts removeAllObjects]; top_ids = @[]; groups = @[]; actions = @[]; }   /* a malformed spec: as none */
     if (!have_spec) { [rows removeAllObjects]; [row_order removeAllObjects]; [layouts removeAllObjects]; [key_names removeAllObjects]; [vk_to_code removeAllObjects]; top_ids = @[]; groups = @[]; actions = @[]; }
-    NSDictionary *fr = framerate_row(); rows[fr[@"id"]] = fr;      /* the Mac's own row ends DISPLAY (or is it, without the spec) */
-    NSMutableArray *g = [groups mutableCopy]; NSUInteger di = NSNotFound;
-    for (NSUInteger k = 0; k < g.count; k++) if ([g[k][@"title"] caseInsensitiveCompare:@"DISPLAY"] == NSOrderedSame) di = k;
-    if (di == NSNotFound) { [g insertObject:@{@"title": @"DISPLAY", @"rows": @[], @"guide": @NO} atIndex:0]; di = 0; }
-    NSMutableDictionary *dg = [g[di] mutableCopy]; dg[@"rows"] = [dg[@"rows"] arrayByAddingObject:fr[@"id"]]; g[di] = dg; groups = g;
-
-    NSString *regPath = [data stringByAppendingPathComponent:@"registry.txt"], *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"];
-    reg_load(regPath);
-    NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
-    for (NSString *rid in rows) {
-        NSString *pk = str(rows[rid][@"plist"]);
-        values[rid] = pk ? (str(saved[pk]) ?: str(rows[rid][@"default"]) ?: @"") : read_value(rows[rid]);
-    }
+    add_modes();
+    reg_load([data stringByAppendingPathComponent:@"registry.txt"]);
+    for (NSString *rid in rows) values[rid] = read_value(rows[rid]);
     /* the key map now: the data folder's copy (the runtime reads it first), else the game folder's, else Classic */
     NSString *ovd = [data stringByAppendingPathComponent:@"game"];
     keys = read_kmp(find_ci(ovd, kmp_file)) ?: read_kmp(find_ci(game, kmp_file)) ?: [(layouts[@"classic"] ?: [NSMutableData dataWithLength:KMP_N]) mutableCopy];
     const char *shot = getenv("DS_LAUNCHER_SHOT");
-    if (getenv("DS_NO_LAUNCHER") && !shot) { apply(values[@"mac_fps"]); return 1; }
+    if (getenv("DS_NO_LAUNCHER") && !shot) { apply(); return 1; }   /* the stored settings, no window */
 
     DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, W, H)];
     v.open = -1; v.bind = -1; v.hover = HIT_NONE;
@@ -592,6 +606,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         if ((e = getenv("DS_LAUNCHER_OPEN"))) for (NSInteger i = 0; i < (NSInteger)groups.count; i++) if ([groups[i][@"title"] caseInsensitiveCompare:@(e)] == NSOrderedSame) v.open = i;
         if ((e = getenv("DS_LAUNCHER_BIND")) && v.guide && atoi(e) < (NSInteger)actions.count) v.bind = atoi(e);
         if ((e = getenv("DS_LAUNCHER_SCROLL"))) [v scrollPage:atoi(e)];
+        if (getenv("DS_LAUNCHER_ROWS")) for (NSString *rid in row_order) {   /* each row's choices, as the window has them */
+            NSMutableArray *l = [NSMutableArray array]; for (NSDictionary *c in choices(rid)) [l addObject:str(dict(c)[@"value"]) ?: @"?"];
+            printf("row %s = %s: %s\n", rid.UTF8String, values[rid].UTF8String, [l componentsJoinedByString:@" "].UTF8String);
+        }
         if ((e = getenv("DS_LAUNCHER_KEY")) && v.bind >= 0)        /* that Mac key code pressed, as the window would get it */
             [v keyDown:[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil
                                       characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:(unsigned short)strtol(e, NULL, 0)]];
@@ -599,7 +617,9 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(shot) atomically:YES];
         if (getenv("DS_LAUNCHER_APPLY")) {          /* development: the files written as Play would */
             NSString *why = nil; BOOL ok = save_all(data, kmp_file, &why);
-            printf("launcher: %s (controls %s)\n", ok ? "saved" : why.UTF8String, layout_name().UTF8String);
+            apply(); const char *f = getenv("DSR_FPSCAP"), *vs = getenv("DSR_VSYNC"), *wm = getenv("DS_WINDOW_MODE");
+            printf("launcher: %s (controls %s; DSR_FPSCAP=%s DSR_VSYNC=%s DS_WINDOW_MODE=%s)\n", ok ? "saved" : why.UTF8String, layout_name().UTF8String,
+                   f ? f : "(unset)", vs ? vs : "(unset)", wm ? wm : "(unset)");
         }
         return 0;
     }
@@ -625,6 +645,6 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     [NSApp runModalForWindow:w];
     [w orderOut:nil];
     if (!result) return 0;
-    apply(values[@"mac_fps"]);
+    apply();
     return 1;
 }

@@ -86,6 +86,11 @@ non-blocking mode (Winsock behaviour; a blocking accepted socket stalled the nat
   in the host window.
 - The game's windowed mode presents with a Blt to the primary surface, which the host never shows: `registry.c`
   answers `FullScreen` = TRUE, and the launcher's Screen row picks the host window instead (`DS_WINDOW_MODE`).
+- macOS (`host/r6_launcher.m`, `host/main.m`): the host passes this display's pixel size, and on a notched MacBook the
+  16:10 area below the notch, as `DS_DISPLAY_MODES` (added to the mode list and to Mission Resolution); Screen = Window
+  opens a titled, resizable window (four fifths of the screen; the first click takes the pointer, Command or leaving
+  the app gives it back); `DSR_FPSCAP` is always exported (`auto` unless the launcher or the player set one), since the
+  mod leaves pacing to the host only when it is there; the picture keeps its shape (640x480 menus pillarboxed).
 - Viewports: a device keeps 64 (`dv_AddViewport`); with 8 the mission's 3D viewport was dropped, its per-frame Clear
   skipped and stale depth hid geometry (the M01 fire escape). Found and fixed on the Mac (9130ccc).
 

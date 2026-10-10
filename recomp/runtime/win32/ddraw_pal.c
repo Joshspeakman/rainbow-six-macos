@@ -683,23 +683,32 @@ NOT_M(dd_DuplicateSurface, 3)
 static const uint16_t modes_std[][2] = {{640, 480}, {800, 600}, {1024, 768}, {1152, 864}, {1280, 720}, {1280, 800},
     {1280, 960}, {1280, 1024}, {1366, 768}, {1440, 900}, {1600, 900}, {1600, 1200}, {1680, 1050}, {1920, 1080},
     {1920, 1200}, {2560, 1080}, {2560, 1440}, {2560, 1600}, {3440, 1440}, {3840, 1600}, {3840, 2160}};
+enum { MODES_EXTRA = 8 };
+static void mode_add(uint16_t (*out)[2], size_t *n, long w, long h)   /* in order of width, then height; once each */
+{
+    if (w < 640 || h < 480 || w > 8192 || h > 8192) return;
+    size_t at = 0;
+    while (at < *n && (out[at][0] < w || (out[at][0] == w && out[at][1] < h))) at++;
+    if (at < *n && out[at][0] == w && out[at][1] == h) return;
+    for (size_t k = *n; k > at; k--) { out[k][0] = out[k - 1][0]; out[k][1] = out[k - 1][1]; }
+    out[at][0] = (uint16_t)w; out[at][1] = (uint16_t)h; (*n)++;
+}
 static size_t mode_list(uint16_t (*out)[2])
 {
-    size_t n = 0; int desk = 0;
-    for (size_t k = 0; k < sizeof modes_std / sizeof *modes_std; k++) {
-        out[n][0] = modes_std[k][0]; out[n][1] = modes_std[k][1];
-        if (out[n][0] == w32_screen_w && out[n][1] == w32_screen_h) desk = 1;
-        n++;
-    }
-    if (!desk && w32_screen_w >= 640 && w32_screen_h >= 480 && w32_screen_w <= 8192 && w32_screen_h <= 8192) {
-        size_t at = 0;                                              /* in order of width, then height */
-        while (at < n && (out[at][0] < w32_screen_w || (out[at][0] == w32_screen_w && out[at][1] < w32_screen_h))) at++;
-        for (size_t k = n; k > at; k--) { out[k][0] = out[k - 1][0]; out[k][1] = out[k - 1][1]; }
-        out[at][0] = (uint16_t)w32_screen_w; out[at][1] = (uint16_t)w32_screen_h; n++;
+    size_t n = 0;
+    for (size_t k = 0; k < sizeof modes_std / sizeof *modes_std; k++) { out[n][0] = modes_std[k][0]; out[n][1] = modes_std[k][1]; n++; }
+    mode_add(out, &n, w32_screen_w, w32_screen_h);
+    /* the host's own sizes of this display (macOS: its pixels, and the 16:10 area below a notch; main.m), "WxH,WxH" */
+    const char *e = getenv("DS_DISPLAY_MODES");
+    for (int k = 0; e && *e && k < MODES_EXTRA - 1; k++) {
+        char *x; long w = strtol(e, &x, 10), h = *x == 'x' ? strtol(x + 1, &x, 10) : 0;
+        mode_add(out, &n, w, h);
+        e = strchr(x, ','); if (e) e++;
     }
     return n;
 }
 #else
+enum { MODES_EXTRA = 1 };
 static const uint16_t modes_std[][2] = {{640, 480}, {800, 600}, {1024, 768}};
 static size_t mode_list(uint16_t (*out)[2])
 {
@@ -711,7 +720,7 @@ M(dd_EnumDisplayModes, 5) ME(PDraw, T_DD)                           /* (flags, d
     uint32_t filter = ARG(2), ctx = ARG(3), cb = ARG(4), v = (uint32_t)vidx_of_this(c, vt_dd), size = v >= 2 ? 124 : 108;
     uint32_t d = heap_alloc(w32_process_heap, 8, 124);
     static const uint32_t depths[] = {8, 16, 32};
-    uint16_t modes[sizeof modes_std / sizeof *modes_std + 1][2]; size_t nmodes = mode_list(modes);
+    uint16_t modes[sizeof modes_std / sizeof *modes_std + MODES_EXTRA][2]; size_t nmodes = mode_list(modes);
     for (int di = 0; di < 3; di++) for (size_t k = 0; k < nmodes; k++) {
         uint32_t w = modes[k][0], h = modes[k][1], bpp = depths[di];
         if (filter) { uint32_t ff = rt_r32(G_MEM, filter + SD_FLAGS);

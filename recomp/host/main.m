@@ -36,6 +36,9 @@ static CAMetalLayer *layer; static NSWindow *win; static uint32_t game_hwnd;
 static volatile int game_running = 1;
 static const char *script_tick(uint32_t fno);
 static int test_mode;                  // DS_TEST=1: ordinary background window, never captures the mouse or takes focus
+static int windowed;                   // DS_WINDOW_MODE=windowed (Rainbow Six's Screen row): a normal window, not the whole screen
+static int captured;                   // the pointer is the game's (hidden, motion only)
+static void capture(int on);
 
 // ---------------------------------------------------------------- rendering
 void w32_crash_init(const char *data_dir, const char *build); void w32_crash_thread(const char *name);
@@ -286,8 +289,12 @@ static void key_event(uint16_t code, int down, int repeat)
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)wantsUpdateLayer { return YES; }
 - (CALayer *)makeBackingLayer { return layer; }
+/* a window without the pointer: the first click into it gives the game the pointer (and is not the game's) */
+static int pointer_click;                // that click's release, not the game's either
+static int take_pointer(void) { if (!windowed || captured) return 0; capture(1); pointer_click = 1; return 1; }
 - (void)moved:(NSEvent *)e
 {
+    if (windowed && !captured) return;                                // the pointer is passing over the window
     /* Relative motion, applied to the game's cursor: the game reads it every frame, moves its own pointer by the
      * distance from the window centre and re-centres it (SetCursorPos). One scale for both axes: the picture is
      * shown aspect-correct (the 800x600 menus with bars at the sides). */
@@ -310,12 +317,12 @@ static void rel_motion(double gx, double gy)
 - (void)mouseDragged:(NSEvent *)e { [self moved:e]; }
 - (void)rightMouseDragged:(NSEvent *)e { [self moved:e]; }
 - (void)otherMouseDragged:(NSEvent *)e { [self moved:e]; }
-- (void)mouseDown:(NSEvent *)e { buttons |= 1; w32_keys[1] = 0x80; post(e.clickCount == 2 ? 0x203 : 0x201, mk(), pos_lp()); }
-- (void)mouseUp:(NSEvent *)e { buttons &= ~1u; w32_keys[1] = 0; post(0x202, mk(), pos_lp()); }
-- (void)rightMouseDown:(NSEvent *)e { buttons |= 2; w32_keys[2] = 0x80; post(e.clickCount == 2 ? 0x206 : 0x204, mk(), pos_lp()); }
-- (void)rightMouseUp:(NSEvent *)e { buttons &= ~2u; w32_keys[2] = 0; post(0x205, mk(), pos_lp()); }
-- (void)otherMouseDown:(NSEvent *)e { buttons |= 0x10; w32_keys[4] = 0x80; post(0x207, mk(), pos_lp()); }
-- (void)otherMouseUp:(NSEvent *)e { buttons &= ~0x10u; w32_keys[4] = 0; post(0x208, mk(), pos_lp()); }
+- (void)mouseDown:(NSEvent *)e { if (take_pointer()) return; buttons |= 1; w32_keys[1] = 0x80; post(e.clickCount == 2 ? 0x203 : 0x201, mk(), pos_lp()); }
+- (void)mouseUp:(NSEvent *)e { if (pointer_click) { pointer_click = 0; return; } buttons &= ~1u; w32_keys[1] = 0; post(0x202, mk(), pos_lp()); }
+- (void)rightMouseDown:(NSEvent *)e { if (take_pointer()) return; buttons |= 2; w32_keys[2] = 0x80; post(e.clickCount == 2 ? 0x206 : 0x204, mk(), pos_lp()); }
+- (void)rightMouseUp:(NSEvent *)e { if (pointer_click) { pointer_click = 0; return; } buttons &= ~2u; w32_keys[2] = 0; post(0x205, mk(), pos_lp()); }
+- (void)otherMouseDown:(NSEvent *)e { if (take_pointer()) return; buttons |= 0x10; w32_keys[4] = 0x80; post(0x207, mk(), pos_lp()); }
+- (void)otherMouseUp:(NSEvent *)e { if (pointer_click) { pointer_click = 0; return; } buttons &= ~0x10u; w32_keys[4] = 0; post(0x208, mk(), pos_lp()); }
 - (void)scrollWheel:(NSEvent *)e
 {
     static double acc; acc += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY / 10.0 : e.scrollingDeltaY;
@@ -335,6 +342,7 @@ static void rel_motion(double gx, double gy)
 - (void)keyUp:(NSEvent *)e { key_event(e.keyCode, 0, 0); }
 - (void)flagsChanged:(NSEvent *)e
 {
+    if (windowed && (e.modifierFlags & NSEventModifierFlagCommand)) capture(0);   // Command: the pointer back, for the title bar or another app
     static const struct { uint16_t code; NSEventModifierFlags flag; } mods[] = {
         {0x38, NSEventModifierFlagShift}, {0x3c, NSEventModifierFlagShift}, {0x3b, NSEventModifierFlagControl}, {0x3e, NSEventModifierFlagControl},
         {0x3a, NSEventModifierFlagOption}, {0x3d, NSEventModifierFlagOption}, {0x39, NSEventModifierFlagCapsLock}};
@@ -346,10 +354,13 @@ static void rel_motion(double gx, double gy)
 // ---------------------------------------------------------------- window + capture
 static void capture(int on)
 {
-    static int captured;
     if (test_mode) return;
     if (on == captured) return;
     captured = on;
+    if (on && windowed && win) {   /* the frozen pointer over the game's window, so clicks land on it and not another app */
+        NSRect c = [win convertRectToScreen:win.contentView.frame]; CGFloat top = NSScreen.screens.firstObject.frame.size.height;
+        CGWarpMouseCursorPosition(CGPointMake(NSMidX(c), top - NSMidY(c)));
+    }
     if (on) { [NSCursor hide]; CGAssociateMouseAndMouseCursorPosition(false); }
     else { CGAssociateMouseAndMouseCursorPosition(true); [NSCursor unhide]; }
 }
@@ -368,14 +379,29 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         NSRect f = NSScreen.mainScreen.frame;
         NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
         if (test_mode) { f = NSMakeRect(80, 80, 960, 620); sm = NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable; }
+        else if (windowed) {   /* four fifths of the screen, its shape (as the Linux host); the picture is letterboxed in it */
+            NSRect vf = NSScreen.mainScreen.visibleFrame; CGFloat w = round(f.size.width * 0.8), h = round(f.size.height * 0.8);
+            if (h > vf.size.height) { w = round(w * vf.size.height / h); h = vf.size.height; }
+            f = NSMakeRect(NSMidX(vf) - w / 2, NSMidY(vf) - h / 2, w, h);
+            sm = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+        }
         win = [[GameWindow alloc] initWithContentRect:f styleMask:sm backing:NSBackingStoreBuffered defer:NO];
         win.releasedWhenClosed = NO;   /* ARC owns it (AppKit's default releases a closed window once more) */
         f.origin = NSZeroPoint;
         win.title = @DS2_TITLE; win.backgroundColor = NSColor.blackColor; win.acceptsMouseMovedEvents = YES;
         GameView *v = [[GameView alloc] initWithFrame:f]; v.wantsLayer = YES;
+#ifdef R6_EDITION
+        v.layerContentsPlacement = NSViewLayerContentsPlacementScaleProportionallyToFit;   // AppKit's default stretched the layer over
+                                                                                            // contentsGravity: 640x480 menus now pillarboxed
+#endif
         win.contentView = v; [win makeFirstResponder:v];
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
         [win setLevel:NSNormalWindowLevel];
+        if (windowed) {
+            win.contentMinSize = NSMakeSize(320, 240);
+            [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; capture(0); }];
+            [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [NSApp terminate:nil]; }];
+        }
     });
 }
 static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visible)
@@ -386,6 +412,7 @@ static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visibl
         if (!win) return;
         if (visible && !win.visible) {
             if (test_mode) [win orderBack:nil];
+            else if (windowed) { [win makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; capture(1); }
             else {
                 [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];
                 [win makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; capture(1);
@@ -456,7 +483,7 @@ static void type_text(NSString *text)
 
 @interface AppDelegate : NSObject <NSApplicationDelegate> @end
 @implementation AppDelegate
-- (void)applicationDidBecomeActive:(NSNotification *)n { (void)n; if (win.visible) capture(1); post(0x1c, 1, 0); }
+- (void)applicationDidBecomeActive:(NSNotification *)n { (void)n; if (win.visible && !windowed) capture(1); post(0x1c, 1, 0); }   // a window waits for a click
 - (void)applicationDidResignActive:(NSNotification *)n { (void)n; capture(0); if (!test_mode) post(0x1c, 0, 0); }   // test mode runs in the background: the game stays active
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s { (void)s; return NSTerminateNow; }
 @end
@@ -524,6 +551,17 @@ int main(int argc, char **argv)
         mkdir(data, 0755); mkdir(drive_c, 0755); mkdir(overlay, 0755);
         NSRect sf = NSScreen.mainScreen.frame; w32_screen_w = (int)sf.size.width; w32_screen_h = (int)sf.size.height;
         w32_screen_scale = NSScreen.mainScreen.backingScaleFactor;
+#ifdef R6_EDITION
+        {   /* this display's own sizes for the game's mode list (ddraw_pal.c) and the launcher's Mission Resolution: its
+             * pixels, then on a MacBook with a notch the 16:10 panel below it (3456 x 2160 of 3456 x 2234; the reported
+             * band, safeAreaInsets, is a little narrower) */
+            NSScreen *sc = NSScreen.mainScreen; long pw = lround(sf.size.width * w32_screen_scale), ph = lround(sf.size.height * w32_screen_scale);
+            NSString *m = [NSString stringWithFormat:@"%ldx%ld", pw, ph]; CGFloat top = 0;
+            if (@available(macOS 12.0, *)) top = sc.safeAreaInsets.top;
+            if (top > 0) { long h = lround((sf.size.height - top) * w32_screen_scale), h16 = pw * 10 / 16; m = [m stringByAppendingFormat:@",%ldx%ld", pw, h16 <= h ? h16 : h]; }
+            setenv("DS_DISPLAY_MODES", m.UTF8String, 0);
+        }
+#endif
         init_keymap();
         {   /* the launch window (resolution, frame rate, updates) unless in test mode */
             int ds_launcher_run(const char *game_dir, const char *data_dir);
@@ -542,7 +580,12 @@ int main(int argc, char **argv)
 #ifndef DF_EDITION
         ensure_resolution(drive_c);                                   // DungeonSiege2.ini
 #endif
+#ifdef R6_EDITION
+        setenv("DSR_FPSCAP", "auto", 0);   // always there: the co-op mod leaves pacing to the host only when it is set; "auto" is
+                                           // ddraw.c's own 120-or-60 (the launcher's Frame Rate, or the player's, came first)
+#endif
         test_mode = getenv("DS_TEST") && atoi(getenv("DS_TEST"));
+        windowed = !test_mode && getenv("DS_WINDOW_MODE") && !strcmp(getenv("DS_WINDOW_MODE"), "windowed");   // set by the launcher (r6_launcher.m) or the player
         if (test_mode) parse_script();
 
         [NSApplication sharedApplication]; [NSApp setActivationPolicy:test_mode ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular];
