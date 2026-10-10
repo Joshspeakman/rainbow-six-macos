@@ -1,7 +1,7 @@
 # Rainbow Six, native (and the Delta Force ports it was forked from)
 
 Red Storm's **Tom Clancy's Rainbow Six** (1998, GOG 1.04), statically recompiled from your own copy into native code for
-Linux and (written, not yet built) Apple Silicon Macs: no Wine, no CrossOver, no emulator. It is the native half of a
+Linux and Apple Silicon Macs: no Wine, no CrossOver, no emulator. It is the native half of a
 cross-OS co-op project: Windows players run a `RainbowSix.exe` with the co-op mod patched in, Linux and Mac players run
 this recompilation of the same patched file, and they play together over the game's own LAN/TCP multiplayer.
 
@@ -16,14 +16,17 @@ is in the folder (stock, or patched with extra code sections) plus `SMACKW32.DLL
 | LAN/TCP co-op with the original running under Wine, either side hosting | working (M01, joined and played) |
 | The co-op mod's patched exe (`.r6coop` section) | recompiles and runs |
 | Voice chat (Voxware) | off, as under Wine ("no codec") |
-| macOS app | written, **not yet built** |
+| macOS app | built and runs; see the Mac validation and remaining coverage in the port notes |
 
 ```sh
 recomp/build_r6.sh "/path/to/Rainbow Six"          # -> recomp/work/r6/app/RainbowSixLinux (about 3 minutes)
 ./install.sh --game-dir "/path/to/Rainbow Six"     # ~/.local/bin/rainbow-six, or Rainbow Six.app on a Mac
 ```
 
-Port notes, test recipes and the Mac handoff: [docs/R6-PORT.md](docs/R6-PORT.md).
+Port notes, test recipes and Mac validation: [docs/R6-PORT.md](docs/R6-PORT.md).
+
+The Delta Force material below describes this fork's original handoff. Current Delta Force builds and validation
+live in their own `delta-force-macos` repository.
 
 ---
 
