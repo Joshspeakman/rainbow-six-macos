@@ -138,6 +138,17 @@ def main():
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName('rainbow-six')
+
+    # a "modes" row (Mission Resolution) also offers the desktop's own size; the host shows any size letterboxed
+    screen = app.primaryScreen()
+    if screen:
+        dpr = screen.devicePixelRatio()
+        dw, dh = int(screen.size().width() * dpr), int(screen.size().height() * dpr)
+        for r in rows.values():
+            ch = r.get('choices', [])
+            if r.get('modes') and dw >= 640 and dh >= 480 and not any(c['value'] == f'{dw}x{dh}' for c in ch):
+                ch.append({'value': f'{dw}x{dh}', 'label': f'{dw} x {dh}', 'note': 'This display'})
+                ch.sort(key=lambda c: tuple(int(v) for v in c['value'].split('x')) if 'x' in c['value'] else (0, 0))
     app.setApplicationDisplayName('Rainbow Six co-op')
     app.setDesktopFileName('rainbow-six')
     W, H, BANNER = 760, 700, 200
@@ -502,6 +513,15 @@ def main():
                 QMessageBox.critical(self, 'Rainbow Six co-op', f"Couldn't save the settings: {e}")
                 return
             self.close()
+            # the frame-rate setting (the mod's R6CoopFrameRate) goes to the host's pacer; the mod leaves it to the host
+            fps = next((values[rid] for rid, r in rows.items() if r.get('reg') == 'R6CoopFrameRate'), '0')
+            if fps == '1000':
+                os.environ['DSR_FPSCAP'], os.environ['DSR_VSYNC'] = '0', '0'          # unlimited
+            elif fps.isdecimal() and int(fps) > 0:
+                os.environ['DSR_FPSCAP'] = fps
+            # Screen: the host's window (the native game itself always draws full screen)
+            full = next((values[rid] for rid, r in rows.items() if r.get('reg') == 'FullScreen'), 'TRUE')
+            os.environ['DS_WINDOW_MODE'] = 'windowed' if full.upper() == 'FALSE' else 'fullscreen'
             os.execv(command[0], command)
 
     def qt_to_vk(ev):
