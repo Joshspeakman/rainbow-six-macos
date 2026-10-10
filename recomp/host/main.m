@@ -5,6 +5,7 @@
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
+#import <GameController/GameController.h>
 #ifndef DS_BUILD
 #define DS_BUILD "dev"
 #endif
@@ -153,6 +154,7 @@ static double vcur_x, vcur_y;          // virtual cursor in game (display mode) 
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
 static uint32_t buttons;               // MK_ flags (defined with the input below)
 static void rel_motion(double gx, double gy);   /* relative motion in game pixels, the real-input path */
+static int raw_moving(void);
 static uint32_t pos_lp(void);
 static void parse_script(void)
 {
@@ -321,6 +323,7 @@ static int take_pointer(void) { if (!windowed || captured) return 0; capture(1);
 - (void)moved:(NSEvent *)e
 {
     if (windowed && !captured) return;                                // the pointer is passing over the window
+    if (raw_moving()) return;                                         // a mouse's motion: its raw counts are the game's
     /* Relative motion, applied to the game's cursor: the game reads it every frame, moves its own pointer by the
      * distance from the window centre and re-centres it (SetCursorPos). One scale for both axes: the picture is
      * shown aspect-correct (the 800x600 menus with bars at the sides). */
@@ -330,6 +333,40 @@ static int take_pointer(void) { if (!windowed || captured) return 0; capture(1);
 }
 - (void)mouseMoved:(NSEvent *)e { [self moved:e]; }
 @end
+/* Raw mouse input (GameController): a mouse's own counts, one point each (as a Windows game reads a mouse), scaled to
+ * game pixels like the pointer's motion. macOS hands a mouse's motion over in whole points rounded after its tracking
+ * speed, so slow, small movements came in uneven steps; the counts come twice as often and evenly, whatever the Mac's
+ * pointer settings. The trackpad stays on the pointer's motion (its fractional steps and macOS's slow-movement curve).
+ * While a mouse moves, the pointer's motion of it is skipped; switching device mid-motion can count a point or two
+ * twice, once. The launcher's Mouse Input row: DS_MOUSE=macos is the pointer's motion for every device. */
+static int raw_mouse(void) { static int v = -1; if (v < 0) v = !(getenv("DS_MOUSE") && !strcmp(getenv("DS_MOUSE"), "macos")); return v; }
+static uint64_t raw_last;                                             // mach time of the last raw motion
+static int raw_moving(void)
+{
+    if (!raw_last) return 0;
+    static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    return (mach_absolute_time() - raw_last) * tb.numer / tb.denom < 100000000ull;   /* 100 ms */
+}
+static void raw_hook(GCMouse *m)
+{
+    if ([m.vendorName rangeOfString:@"Trackpad" options:NSCaseInsensitiveSearch].location != NSNotFound) return;
+    m.mouseInput.mouseMovedHandler = ^(GCMouseInput *mi, float dx, float dy) {   /* on the main queue, as the pointer's events */
+        (void)mi;
+        if (!captured || !win) return;
+        raw_last = mach_absolute_time();
+        NSSize b = win.contentView.bounds.size; if (b.width < 1 || b.height < 1) return;
+        uint32_t mw, mh; dsr_mode_size(&mw, &mh);
+        double s = fmax(mw / b.width, mh / b.height);
+        rel_motion(dx * s, -dy * s);                                  /* GameController's y is up */
+    };
+}
+static void raw_mouse_start(void)
+{
+    if (test_mode || !raw_mouse()) return;
+    for (GCMouse *m in GCMouse.mice) raw_hook(m);
+    [NSNotificationCenter.defaultCenter addObserverForName:GCMouseDidConnectNotification object:nil queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *n) { raw_hook(n.object); }];
+}
 static void rel_motion(double gx, double gy)
 {
     static double fx, fy; fx += gx; fy += gy;
@@ -619,6 +656,7 @@ int main(int argc, char **argv)
 
         [NSApplication sharedApplication]; [NSApp setActivationPolicy:test_mode ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular];
         AppDelegate *del = [AppDelegate new]; NSApp.delegate = del;
+        raw_mouse_start();
         NSMenu *bar = [NSMenu new], *appm = [NSMenu new]; NSMenuItem *it = [NSMenuItem new]; it.submenu = appm; [bar addItem:it];
         [appm addItemWithTitle:@"Quit " DS2_TITLE action:@selector(terminate:) keyEquivalent:@"q"]; NSApp.mainMenu = bar;
 

@@ -17,6 +17,6 @@ LAUNCHER=launcher.m; [[ $NAME == RainbowSix ]] && LAUNCHER=r6_launcher.m       #
 clang -c -O2 -fobjc-arc -Wall -Wno-unused-function "${EDITION_FLAGS[@]}" -o "$OUT/obj/host/launcher.o" "$HERE/host/$LAUNCHER"
 MOJO=(); [[ -d "$OUT/obj/rt/mojo" ]] && MOJO=("$OUT"/obj/rt/mojo/*.o)
 clang -o "$APP/$NAME" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "${MOJO[@]}" "$OUT"/obj/host/*.o \
-  -framework AppKit -framework Metal -framework QuartzCore -framework CoreText -framework CoreGraphics -framework CoreFoundation -framework AudioToolbox -lz
+  -framework AppKit -framework Metal -framework QuartzCore -framework CoreText -framework CoreGraphics -framework CoreFoundation -framework AudioToolbox -framework GameController -lz
 cp "$ROOT/src/renderer/shaders.metal" "$ROOT/src/dsr/dsr_snapshot.bin" "$APP/"
 echo "$APP/$NAME"
