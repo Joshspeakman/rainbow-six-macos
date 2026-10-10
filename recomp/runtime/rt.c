@@ -250,18 +250,31 @@ __thread uint32_t rt_host_rc = UINT32_MAX;                  /* the x87 rounding 
 #define NEAR_BEGIN int mode0 = fegetround(); if (mode0 != FE_TONEAREST) fesetround(FE_TONEAREST);
 #define NEAR_END if (mode0 != FE_TONEAREST) fesetround(mode0);
 #endif
+/* W32_DBG_X87LOG=<file>: every transcendental's operation, operands and result (development: libm comparisons) */
+static FILE *x87log; static int x87log_init; static long x87log_n;
+static void x87_log(int op, double y, double x, double r)
+{
+    if (!x87log_init) { x87log_init = 1; const char *e = getenv("W32_DBG_X87LOG"); if (e) x87log = fopen(e, "wb"); }
+    if (!x87log || x87log_n++ > 4000000) return;
+    struct { int32_t op, pad; double y, x, r; } rec = {op, 0, y, x, r}; fwrite(&rec, sizeof rec, 1, x87log);
+}
+/* tan, sin, cos and atan2 correctly rounded (third_party/core-math): the same bits on every host, where Apple's and
+ * glibc's libm differ in the last place (enough to move a camera across a doorway plane) */
+double cr_tan(double), cr_sin(double), cr_cos(double), cr_atan2(double, double);
 double rt_x87_1(int op, double x)
 {
     NEAR_BEGIN __asm__ volatile("" : "+" FPREG (x));
-    double r = op == 0 ? expm1(x * 0.693147180559945309417) : op == 1 ? tan(x) : op == 2 ? sin(x) : cos(x);
+    double r = op == 0 ? expm1(x * 0.693147180559945309417) : op == 1 ? cr_tan(x) : op == 2 ? cr_sin(x) : cr_cos(x);
     __asm__ volatile("" : "+" FPREG (r)); NEAR_END
+    x87_log(op, 0, x, r);
     return r;
 }
 double rt_x87_2(int op, double y, double x)
 {
     NEAR_BEGIN __asm__ volatile("" : "+" FPREG (x), "+" FPREG (y));
-    double r = op == 0 ? y * log2(x) : op == 1 ? atan2(y, x) : y * log2(x + 1.0);
+    double r = op == 0 ? y * log2(x) : op == 1 ? cr_atan2(y, x) : y * log2(x + 1.0);
     __asm__ volatile("" : "+" FPREG (r)); NEAR_END
+    x87_log(10 + op, y, x, r);
     return r;
 }
 double rt_f80_load(const uint8_t *M, uint32_t a)
