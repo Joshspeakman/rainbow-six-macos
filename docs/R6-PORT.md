@@ -193,3 +193,9 @@ FPS, with GPU roughly 0.6–1.3 ms across these views. A close-wall night-vision
 after toggling is almost black; later captures at the same position become green as the transition settles.
 The transition capture is retained as timing evidence, not reported as a missing shader. Audio is muted, and
 campaign, co-op networking and water are not covered by this visual run.
+
+The signed installed co-op update also runs the range at 3456x2160 with an initial 4 MB buffer, exercising growth
+for the larger resources. Corrected active-scene checks show about 60 submitted FPS at a 60 cap, roughly
+3.4–3.5 ms GPU, movement, firing (30 to 27 rounds), settled night vision and normal UI exit. Early ~24 FPS
+samples were a paused start dialog targeted with unscaled test coordinates and are excluded from gameplay
+performance. High-resolution pause-menu buttons use scaled coordinates; the main menu returns to 640x480.
