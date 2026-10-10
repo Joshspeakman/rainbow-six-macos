@@ -11,7 +11,7 @@ samples = [struct.unpack_from('<IIQ', raw, k) for k in range(0, len(raw) - 15, 1
 syms = []
 for line in subprocess.run(['nm', '-C', '--defined-only', binary], capture_output=True, text=True).stdout.splitlines():
     p = line.split(None, 2)
-    if len(p) == 3 and p[1] in 'tTwW': syms.append((int(p[0], 16), p[2]))
+    if len(p) == 3 and p[1] in 'tTwW': syms.append((int(p[0], 16), p[2][1:] if sys.platform == 'darwin' and p[2].startswith('_') else p[2]))   # Mach-O: a leading _
 syms.sort(); addrs = [a for a, _ in syms]
 assert samples[0][0] == 0xffffffff, 'no address record'
 base = samples[0][2] - next(a for a, n in syms if n == 'prof_init')
