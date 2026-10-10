@@ -389,9 +389,11 @@ int main(int argc,char **argv) {
  const char *fps=getenv("DSR_FPSCAP");
  if(!fps || !strcmp(fps,"auto") || !strcmp(fps,"display")) {
   int hz=w32_screen_hz;
-#if defined(FNV_EDITION) || defined(R6_EDITION)
-  if(hz>60) hz=60;   /* Rainbow Six: game speed above 60 fps has not been compared with the original */   /* Gamebryo's physics and animation misbehave above 60 fps (as on Windows without a frame limiter); DSR_FPSCAP=<n> overrides */
+#if defined(FNV_EDITION)
+  if(hz>60) hz=60;   /* Gamebryo's physics and animation misbehave above 60 fps (as on Windows without a frame limiter); DSR_FPSCAP=<n> overrides */
 #endif
+  /* Rainbow Six steps its simulation by real elapsed milliseconds: the same speed at 60 and 287 fps (r6-coop
+   * docs/re/frame-timing.md); the co-op mod keeps it from running frames where no millisecond passed */
   char rate[32]; snprintf(rate,sizeof rate,"%d",hz); setenv("DSR_FPSCAP",rate,1);
  }
  w32_screen_scale=1;

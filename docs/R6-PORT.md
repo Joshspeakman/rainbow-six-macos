@@ -79,6 +79,16 @@ address of `gethostbyname(gethostname())`: that is now the default route's inter
 the router's public address); `R6_HOST_IP=<a.b.c.d>` overrides. Accepted sockets keep the listening socket's
 non-blocking mode (Winsock behaviour; a blocking accepted socket stalled the native host's loop on every exchange).
 
+## Display (with the co-op mod's display options)
+
+- `EnumDisplayModes` (R6_EDITION) lists 640x480 to 3840x2160 in every common shape plus the desktop's own size; the
+  mod lifts the game's 1024x768 limit and its 16:9 cap on the 3D window, so missions run at any of them, letterboxed
+  in the host window.
+- The game's windowed mode presents with a Blt to the primary surface, which the host never shows: `registry.c`
+  answers `FullScreen` = TRUE, and the launcher's Screen row picks the host window instead (`DS_WINDOW_MODE`).
+- Viewports: a device keeps 64 (`dv_AddViewport`); with 8 the mission's 3D viewport was dropped, its per-frame Clear
+  skipped and stale depth hid geometry (the M01 fire escape). Found and fixed on the Mac (9130ccc).
+
 ## Verified on Linux
 
 - Main menu identical to the original's (intro movie skipped with `Movie On`/`PlayIntroMovie` FALSE); single player,
@@ -124,8 +134,9 @@ non-blocking mode (Winsock behaviour; a blocking accepted socket stalled the nat
   differ per instance; manual join works. Between machines, use the standard ports.
 - Voice chat is off (no Voxware codecs); the original under Wine has none either.
 - The music level options (`ActionMusicVolume`) are not applied to the CD stream.
-- The Linux host caps the game at 60 fps (`DSR_FPSCAP=<n>` overrides); its speed above 60 was never compared with the
-  original.
+- (resolved) Frame rate: the game steps by real elapsed milliseconds, so the host no longer caps it at 60; the same AI
+  walk took the same time at 60 and 287 fps. Auto follows the display; the launcher passes the mod's R6CoopFrameRate
+  as `DSR_FPSCAP` (Unlimited = `DSR_FPSCAP=0 DSR_VSYNC=0`).
 - Crash/hang reports still say "Dungeon Siege Native" and name the image DungeonSiege.exe (inherited, cosmetic).
 - `tools/analyze.py`/`lift.py` changes (zero-run cutoff, slack bytes, C++ continuations) apply to the Delta Force builds
   too and have not been re-checked there.
