@@ -212,6 +212,26 @@ static void add_modes(void)
         NSMutableDictionary *r = [rows[rid] mutableCopy]; r[@"choices"] = ch; rows[rid] = r;
     }
 }
+/* The Mac's own rows, not in the mod's spec (shared with Windows and Linux): Mouse Input after the game's Mouse Speed,
+ * kept in registry.txt under a name the game never reads. Raw is a mouse's own counts (main.m, GameController);
+ * macOS Pointer is the pointer's motion, with the Mac's tracking speed. */
+static void add_mac_rows(void)
+{
+    NSString *rid = @"mac_mouse_input";
+    rows[rid] = @{@"id": rid, @"label": @"Mouse Input", @"type": @"choice", @"reg": @"R6MacMouseInput", @"store": @"sz", @"default": @"raw",
+                  @"note": @"", @"choices": @[
+                      @{@"value": @"raw", @"label": @"Raw", @"note": @"The mouse's own movement, in even steps"},
+                      @{@"value": @"macos", @"label": @"macOS Pointer", @"note": @"The pointer's movement, at this Mac's tracking speed"}]};
+    [row_order addObject:rid];
+    NSMutableArray *g = [groups mutableCopy]; BOOL placed = NO;
+    for (NSUInteger k = 0; k < g.count && !placed; k++) {
+        NSMutableArray *ids = [g[k][@"rows"] mutableCopy]; NSUInteger at = [ids indexOfObject:@"mouse_speed"];
+        if (at == NSNotFound) continue;
+        [ids insertObject:rid atIndex:at + 1]; NSMutableDictionary *d = [g[k] mutableCopy]; d[@"rows"] = ids; g[k] = d; placed = YES;
+    }
+    if (!placed) [rows removeObjectForKey:rid], [row_order removeObject:rid];   /* no Mouse Speed row: no panel for it */
+    groups = g;
+}
 /* the settings the host reads, as environment (before main.m makes the Metal layer and the game starts): Frame Rate
  * (R6CoopFrameRate; the mod leaves pacing to the host) as DSR_FPSCAP, 0 the host's own, 1000 unlimited without vsync;
  * Screen (FullScreen; the game itself always draws full screen natively) as DS_WINDOW_MODE. One the player set
@@ -227,6 +247,7 @@ static void apply(void)
     if ([fps isEqualToString:@"1000"]) { setenv("DSR_FPSCAP", "0", 0); setenv("DSR_VSYNC", "0", 0); }   /* overwrite 0: the player's stays */
     else if (fps.intValue > 0) setenv("DSR_FPSCAP", [NSString stringWithFormat:@"%d", fps.intValue].UTF8String, 0);
     if (full) setenv("DS_WINDOW_MODE", [full caseInsensitiveCompare:@"FALSE"] == NSOrderedSame ? "windowed" : "fullscreen", 0);
+    if ([value_of_reg(@"R6MacMouseInput") isEqualToString:@"macos"]) setenv("DS_MOUSE", "macos", 0);
 }
 
 /* reads r6coop-launcher.json: the game folder's, else a copy in the app; NO when there is none (or it can't be read) */
@@ -584,7 +605,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     @try { have_spec = load_spec(game); }
     @catch (NSException *x) { (void)x; have_spec = NO; [rows removeAllObjects]; [row_order removeAllObjects]; [layouts removeAllObjects]; top_ids = @[]; groups = @[]; actions = @[]; }   /* a malformed spec: as none */
     if (!have_spec) { [rows removeAllObjects]; [row_order removeAllObjects]; [layouts removeAllObjects]; [key_names removeAllObjects]; [vk_to_code removeAllObjects]; top_ids = @[]; groups = @[]; actions = @[]; }
-    add_modes();
+    add_modes(); if (have_spec) add_mac_rows();
     reg_load([data stringByAppendingPathComponent:@"registry.txt"]);
     for (NSString *rid in rows) values[rid] = read_value(rows[rid]);
     /* the key map now: the data folder's copy (the runtime reads it first), else the game folder's, else Classic */
