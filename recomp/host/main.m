@@ -391,8 +391,8 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         win.title = @DS2_TITLE; win.backgroundColor = NSColor.blackColor; win.acceptsMouseMovedEvents = YES;
         GameView *v = [[GameView alloc] initWithFrame:f]; v.wantsLayer = YES;
 #ifdef R6_EDITION
-        v.layerContentsPlacement = NSViewLayerContentsPlacementScaleProportionallyToFit;   // AppKit's default stretched the layer over
-                                                                                            // contentsGravity: 640x480 menus now pillarboxed
+        v.layerContentsPlacement = NSViewLayerContentsPlacementScaleProportionallyToFit;   // in a window AppKit's default stretched the
+            // layer over contentsGravity; now 640x480 menus are pillarboxed. Full screen still fills the display (unchanged).
 #endif
         win.contentView = v; [win makeFirstResponder:v];
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
@@ -581,8 +581,11 @@ int main(int argc, char **argv)
         ensure_resolution(drive_c);                                   // DungeonSiege2.ini
 #endif
 #ifdef R6_EDITION
-        setenv("DSR_FPSCAP", "auto", 0);   // always there: the co-op mod leaves pacing to the host only when it is set; "auto" is
-                                           // ddraw.c's own 120-or-60 (the launcher's Frame Rate, or the player's, came first)
+        {   // always there: the co-op mod leaves pacing to the host only when it is set. Unset (the launcher's Match Display,
+            // or no launcher) is this display's refresh, as linux.c does; the launcher's Frame Rate, or the player's, came first
+            NSInteger hz = NSScreen.mainScreen.maximumFramesPerSecond; char r[16]; snprintf(r, sizeof r, "%ld", (long)(hz > 0 ? hz : 60));
+            setenv("DSR_FPSCAP", r, 0);
+        }
 #endif
         test_mode = getenv("DS_TEST") && atoi(getenv("DS_TEST"));
         windowed = !test_mode && getenv("DS_WINDOW_MODE") && !strcmp(getenv("DS_WINDOW_MODE"), "windowed");   // set by the launcher (r6_launcher.m) or the player
@@ -602,6 +605,8 @@ int main(int argc, char **argv)
         H = m; ring = (uint8_t *)m + DSR_HEADER_SIZE; H->magic = DSR_SHM_MAGIC; H->version = 1;
         dsr_attach_consumer(H);
         w32_host_window_created = window_created; w32_host_window_changed = window_changed;
+        fprintf(stderr, "host: %s, DSR_FPSCAP=%s DSR_VSYNC=%s DS_WINDOW_MODE=%s\n", test_mode ? "test window" : windowed ? "windowed" : "full screen",
+                getenv("DSR_FPSCAP") ?: "(unset)", getenv("DSR_VSYNC") ?: "(unset)", getenv("DS_WINDOW_MODE") ?: "(unset)");
         if (w32_prepare(exe, game, drive_c, overlay)) { fprintf(stderr, "DungeonSiegeNative: cannot load %s\n", exe); return 1; }
         if (!test_mode) report_from_last_session(data);
         [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *tm) { (void)tm; w32_crash_heartbeat(2); }];   /* UI thread alive */
