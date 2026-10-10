@@ -251,6 +251,7 @@ static void init_keymap(void)
     for (size_t k = 0; k < sizeof t / sizeof *t; k++) { keymap[t[k][0]].vk = t[k][1]; keymap[t[k][0]].scan = t[k][2]; keymap[t[k][0]].ext = t[k][3]; }
 }
 static uint32_t buttons;               // MK_ flags
+uint8_t ds_mac_vk(uint16_t code) { return code < 128 ? keymap[code].vk : 0; }   // the launch window's Key Guide (r6_launcher.m)
 static void post(uint32_t msg, uint32_t wp, uint32_t lp) { if (game_hwnd) w32_post(w32_window_tid(game_hwnd), game_hwnd, msg, wp, lp); }
 static uint32_t mk(void)
 {
@@ -526,9 +527,9 @@ int main(int argc, char **argv)
         init_keymap();
         {   /* the launch window (resolution, frame rate, updates) unless in test mode */
             int ds_launcher_run(const char *game_dir, const char *data_dir);
-#ifdef DF_EDITION
+#if defined(DF_EDITION) && !defined(R6_EDITION)
             if (0) {                                                  // Delta Force: its own settings screen (renderer, resolution) is the launcher
-#else
+#else                                                                 // Rainbow Six: the co-op mod's window (r6_launcher.m)
             if (!getenv("DS_TEST") || getenv("DS_LAUNCHER_SHOT")) {
 #endif
                 [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
