@@ -1108,12 +1108,22 @@ M(dv_SetRenderTarget, 3) ME(PDev, T_DEV)
 END
 M(dv_GetRenderTarget, 2) ME(PDev, T_DEV) rt_w32(G_MEM, ARG(1), me->rt ? me->rt->g[2] : 0); if (me->rt) __atomic_add_fetch(&me->rt->ref, 1, __ATOMIC_SEQ_CST); RET(DD_OK, 2); END
 M(dv_GetRenderState, 3) ME(PDev, T_DEV) rt_w32(G_MEM, ARG(2), ARG(1) < 256 ? me->rs[ARG(1)] : 0); RET(DD_OK, 3); END
+/* a texture handle (D3DTEXTUREHANDLE: the texture's guest interface) -> its surface. Rainbow Six sets ~100 a frame among
+ * ~6600 objects; a small cache of object indexes, each checked on use (an object freed or reused misses), spares the scan */
+static PSurf *tex_of_handle(uint32_t v)
+{
+    if (!v) return 0;
+    static uint32_t key[1024], idx[1024]; uint32_t h = (v * 0x9e3779b1u) >> 22, k = idx[h];
+    if (key[h] == v && k && k < nobjs && objs[k].type == T_TEX && ((PSurf *)objs[k].p)->g_tex == v) return objs[k].p;
+    PSurf *t = 0;
+    for (k = 1; k < nobjs; k++) if (objs[k].type == T_TEX && ((PSurf *)objs[k].p)->g_tex == v) { t = objs[k].p; key[h] = v; idx[h] = k; }   /* the last, as before */
+    return t;
+}
 M(dv_SetRenderState, 3) ME(PDev, T_DEV)
     uint32_t st = ARG(1), v = ARG(2); if (st >= 256) RET(DD_OK, 3);
     me->rs[st] = v;
     switch (st) {
-    case 1: { PSurf *t = 0; for (uint32_t k = 1; k < nobjs && v; k++) if (objs[k].type == T_TEX && ((PSurf *)objs[k].p)->g_tex == v) t = objs[k].p;
-              dev_set_tex(me, 0, t); dev_texture_blend(me); break; }               /* TEXTUREHANDLE */
+    case 1: dev_set_tex(me, 0, tex_of_handle(v)); dev_texture_blend(me); break;   /* TEXTUREHANDLE */
     case 3: tss_emit(0, 12, v); break;                                    /* TEXTUREADDRESS */
     case 44: tss_emit(0, 13, v); break; case 45: tss_emit(0, 14, v); break;
     case 17: tss_emit(0, 16, v == 2 ? 2 : 1); break;                      /* TEXTUREMAG: D3DFILTER_ -> D3DTFG_ */
