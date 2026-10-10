@@ -89,6 +89,25 @@ static void *render_thread(void *arg)
                         if (shot_at == -2) { const char *e = test_mode ? getenv("DS_SHOT") : 0; shot_at = -1;   /* test mode only: it writes anywhere */ if (e) { const char *cm = strrchr(e, ','); if (cm) { snprintf(shot_path, sizeof shot_path, "%.*s", (int)(cm - e), e); shot_at = atol(cm + 1); } } }
                         const char *sp = test_mode ? script_tick(fno) : 0;
                         if (sp) { snprintf(shot_path, sizeof shot_path, "%s", sp); shot_at = fno; }
+                        {   /* DS_SEQ_DIR=<dir> + cmdfile "seq:N": the next N frames, quarter size, raw BGRA, to <dir>/f<frame>.bgra (development) */
+                            extern int ds_seq_left; static const char *sdir; static int si; if (!si) { si = 1; sdir = test_mode ? getenv("DS_SEQ_DIR") : 0; }
+                            if (sdir && ds_seq_left > 0) { ds_seq_left--;
+                                id<MTLTexture> tex = dsr_renderer_presented(r); dsr_renderer_flush(r, 1);
+                                if (tex && tex.pixelFormat == MTLPixelFormatBGRA8Unorm) {
+                                    NSUInteger tw = tex.width, th = tex.height;
+                                    id<MTLBuffer> buf = [layer.device newBufferWithLength:tw * th * 4 options:MTLResourceStorageModeShared];
+                                    static id<MTLCommandQueue> q; if (!q) q = [layer.device newCommandQueue]; id<MTLCommandBuffer> cbs = [q commandBuffer];
+                                    id<MTLBlitCommandEncoder> bl = [cbs blitCommandEncoder];
+                                    [bl copyFromTexture:tex sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(tw, th, 1)
+                                               toBuffer:buf destinationOffset:0 destinationBytesPerRow:tw * 4 destinationBytesPerImage:tw * th * 4];
+                                    [bl endEncoding]; [cbs commit]; [cbs waitUntilCompleted];
+                                    uint32_t qw = (uint32_t)tw / 4, qh = (uint32_t)th / 4; uint32_t *o = malloc((size_t)qw * qh * 4); const uint32_t *src = buf.contents;
+                                    for (uint32_t y = 0; y < qh; y++) for (uint32_t x = 0; x < qw; x++) o[y * qw + x] = src[(y * 4) * tw + x * 4];
+                                    char fn[1200]; snprintf(fn, sizeof fn, "%s/f%06u_%ux%u.bgra", sdir, fno, qw, qh);
+                                    FILE *f = fopen(fn, "wb"); if (f) { fwrite(o, 4, (size_t)qw * qh, f); fclose(f); } free(o);
+                                }
+                            }
+                        }
                         if ((long)fno == shot_at) {
                             id<MTLTexture> tex = dsr_renderer_presented(r); dsr_renderer_flush(r, 1);
                             if (tex && tex.pixelFormat == MTLPixelFormatBGRA8Unorm) {
@@ -129,6 +148,7 @@ static void *render_thread(void *arg)
 // path as real input. Coordinates are in the game's current display mode.
 typedef struct { uint32_t frame; double at; char kind[8]; int x, y; char path[512]; } Act;   // at > 0: seconds from start
 static Act acts[256]; static int nacts;
+int ds_seq_left;                         // frames still to record (cmdfile "seq:N", DS_SEQ_DIR)
 static double vcur_x, vcur_y;          // virtual cursor in game (display mode) pixels
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
 static uint32_t buttons;               // MK_ flags (defined with the input below)
@@ -209,6 +229,7 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
             if (fno == a->frame + 20) post(0x201, 1, pos_lp());
         } else if (!strcmp(a->kind, "move") && fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
+        else if (!strcmp(a->kind, "seq") && fno == a->frame) { extern int ds_seq_left; ds_seq_left = a->x; }
         else if (!strcmp(a->kind, "rel") && fno >= a->frame && fno < a->frame + 60) rel_motion(a->x / 60.0, a->y / 60.0);   /* x,y over 60 frames, like a trackpad swipe */
         else if (!strcmp(a->kind, "key")) {
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
