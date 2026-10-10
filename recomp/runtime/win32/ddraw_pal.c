@@ -860,10 +860,13 @@ static void dev_bind(PDev *d)                                          /* the re
         if (id != d->bound_tex[k]) { uint32_t *p = cmd_begin(DSR_TEXTURE, 8); p[0] = (uint32_t)k; p[1] = id; cmd_end(); d->bound_tex[k] = id; }
     }
 }
+static float vp_clip[4]; static void xf_emit(uint32_t t);   /* the viewport's clip volume, below with the transforms */
 static void dev_viewport(PDev *d)
 {
     if (!d->vp || !d->vp->set) return;
     uint32_t *p = cmd_begin(DSR_VIEWPORT, 24); memcpy(p, d->vp->data + 1, 16); memcpy(p + 4, d->vp->data + 9, 8); cmd_end();
+    float c[4]; memcpy(c, d->vp->data + 5, 16);
+    if (memcmp(c, vp_clip, 16)) { memcpy(vp_clip, c, 16); xf_emit(3); }
 }
 static uint32_t legacy_fvf(uint32_t vt)                                  /* D3DVT_VERTEX, LVERTEX, TLVERTEX, or already an FVF */
 {
@@ -1066,7 +1069,22 @@ OK_M(dv_SetLightState, 3) M(dv_GetLightState, 3) rt_w32(G_MEM, ARG(2), 0); RET(D
 /* world, view and projection (D3DTRANSFORMSTATE_ 1, 2, 3): Rainbow Six draws its world as D3DVT_LVERTEX, transformed
  * here (the renderer's slots 1..3 are the same three); the DirectX 6 games only drew pre-transformed vertices */
 static float dev_xf[4][16] = {{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}};
-static void xf_emit(uint32_t t) { uint32_t *p = cmd_begin(DSR_TRANSFORM, 68); p[0] = t; memcpy(p + 1, dev_xf[t], 64); cmd_end(); }
+/* D3DVIEWPORT2's clip volume (dvClipX, dvClipY, dvClipWidth, dvClipHeight): the part of the projected view that fills
+ * the viewport. Rainbow Six draws what lies beyond a doorway or window through a small viewport whose clip volume is that
+ * opening's rectangle of the whole view; without it the whole view was squeezed into the opening. The renderer gets the
+ * projection already composed with that mapping (x' = (2x - (2cx + cw)w) / cw, y' = (2y - (2cy - ch)w) / ch). */
+static float vp_clip[4] = {-1, 1, 2, 2};
+static void xf_emit(uint32_t t)
+{
+    uint32_t *p = cmd_begin(DSR_TRANSFORM, 68); p[0] = t;
+    if (t == 3 && (vp_clip[0] != -1 || vp_clip[1] != 1 || vp_clip[2] != 2 || vp_clip[3] != 2) && vp_clip[2] > 0 && vp_clip[3] > 0) {
+        float m[16]; memcpy(m, dev_xf[3], 64);
+        float a = 2 / vp_clip[2], c = -(2 * vp_clip[0] + vp_clip[2]) / vp_clip[2], b = 2 / vp_clip[3], e = -(2 * vp_clip[1] - vp_clip[3]) / vp_clip[3];
+        for (int r = 0; r < 4; r++) { float x = m[4 * r], y = m[4 * r + 1], w = m[4 * r + 3]; m[4 * r] = a * x + c * w; m[4 * r + 1] = b * y + e * w; }
+        memcpy(p + 1, m, 64);
+    } else memcpy(p + 1, dev_xf[t], 64);
+    cmd_end();
+}
 M(dv_SetTransform, 3)
     uint32_t t = ARG(1); if (t < 1 || t > 3) RET(DDERR_INVALIDPARAMS, 3);
     memcpy(dev_xf[t], GP(ARG(2)), 64); xf_emit(t);
