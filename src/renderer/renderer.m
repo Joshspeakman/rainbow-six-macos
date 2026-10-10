@@ -407,6 +407,15 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, r->ds); if (!e) { dsr_stat[4]++; return; }
     void *vdst = ring_alloc(r, nv * stride, &voff); memcpy(vdst, p + 4, nv * stride);
     if (ni) { void *idst = ring_alloc(r, ni * 2, &ioff); memcpy(idst, (const uint8_t *)(p + 4) + nv * stride, ni * 2); }
+    /* a triangle fan becomes a list, its indices placed now: a ring_alloc after the encoder's state is bound may wrap
+     * the ring onto a new command buffer and encoder that has none of that state (the driver then faults) */
+    uint32_t fan_tris = 0, ooff = 0;
+    if (prim == 6) {
+        uint32_t fc = ni ? ni : nv; if (fc < 3) return;                  // nothing to draw (and fc - 2 would wrap)
+        fan_tris = fc - 2; uint16_t *ix = ring_alloc(r, fan_tris * 6, &ooff);
+        const uint16_t *src = ni ? (const uint16_t *)((const uint8_t *)(p + 4) + nv * stride) : NULL;
+        for (uint32_t k = 0; k < fan_tris; k++) { ix[k * 3] = src ? src[0] : 0; ix[k * 3 + 1] = src ? src[k + 1] : k + 1; ix[k * 3 + 2] = src ? src[k + 2] : k + 2; }
+    }
     e = enc_for(r, r->rt, r->ds);   // ring_alloc may have flushed
     Uniforms u; memset(&u, 0, sizeof u);
     float wv[16]; mat_mul(wv, r->xf[1], r->xf[2]); mat_mul(u.wvp, wv, r->xf[3]); memcpy(u.wv, wv, 64); memcpy(u.tex0, r->xf[16], 64); memcpy(u.tex1, r->xf[17], 64);
@@ -441,16 +450,11 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     if (r->es.smp[0] != s0) { [e setFragmentSamplerState:s0 atIndex:0]; r->es.smp[0] = s0; }
     if (r->es.tex[1] != x1) { [e setFragmentTexture:x1 atIndex:1]; r->es.tex[1] = x1; }
     if (r->es.smp[1] != s1) { [e setFragmentSamplerState:s1 atIndex:1]; r->es.smp[1] = s1; }
-    MTLPrimitiveType pt; uint32_t count = ni ? ni : nv;
+    MTLPrimitiveType pt;
     switch (prim) { case 1: pt = MTLPrimitiveTypePoint; break; case 2: pt = MTLPrimitiveTypeLine; break; case 3: pt = MTLPrimitiveTypeLineStrip; break;
                     case 5: pt = MTLPrimitiveTypeTriangleStrip; break; default: pt = MTLPrimitiveTypeTriangle; }
-    if (prim == 6) {   // triangle fan -> list
-        uint32_t tris = count - 2, ooff; uint16_t *ix = ring_alloc(r, tris * 6, &ooff);
-        const uint16_t *src = ni ? (const uint16_t *)((const uint8_t *)(p + 4) + nv * stride) : NULL;
-        for (uint32_t k = 0; k < tris; k++) { ix[k * 3] = src ? src[0] : 0; ix[k * 3 + 1] = src ? src[k + 1] : k + 1; ix[k * 3 + 2] = src ? src[k + 2] : k + 2; }
-        e = enc_for(r, r->rt, r->ds);
-        [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:tris * 3 indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ooff];
-    } else if (ni) [e drawIndexedPrimitives:pt indexCount:ni indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ioff];
+    if (prim == 6)   // triangle fan, as a list (indices placed above)
+        [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:fan_tris * 3 indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ooff]; else if (ni) [e drawIndexedPrimitives:pt indexCount:ni indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ioff];
     else [e drawPrimitives:pt vertexStart:0 vertexCount:nv];
 }
 /* ---- effect programs ---- */
@@ -560,6 +564,7 @@ static void draw_prog(DSRRenderer *r, const uint32_t *p, uint32_t size)
     MTLPrimitiveType pt; uint32_t count = ni ? ni : nv;
     switch (prim) { case 1: pt = MTLPrimitiveTypePoint; break; case 2: pt = MTLPrimitiveTypeLine; break; case 3: pt = MTLPrimitiveTypeLineStrip; break;
                     case 5: pt = MTLPrimitiveTypeTriangleStrip; break; default: pt = MTLPrimitiveTypeTriangle; }
+    if (prim == 6 && count < 3) return;                                   // a fan of fewer than 3: nothing (count - 2 would wrap)
     if (prim == 6) {
         uint32_t tris = count - 2, ooff; uint16_t *ix = ring_alloc(r, tris * 6, &ooff);
         const uint16_t *src = ni ? (const uint16_t *)((const uint8_t *)(p + 5) + nv * stride) : NULL;
