@@ -148,8 +148,18 @@ non-blocking mode (Winsock behaviour; a blocking accepted socket stalled the nat
   walk took the same time at 60 and 287 fps. Auto follows the display; the launcher passes the mod's R6CoopFrameRate
   as `DSR_FPSCAP` (Unlimited = `DSR_FPSCAP=0 DSR_VSYNC=0`).
 - Crash/hang reports still say "Dungeon Siege Native" and name the image DungeonSiege.exe (inherited, cosmetic).
-- `tools/analyze.py`/`lift.py` changes (zero-run cutoff, slack bytes, C++ continuations) apply to the Delta Force builds
-  too and have not been re-checked there.
+- (re-checked 2026-10-10, Mac) The `tools/analyze.py`/`lift.py`/`pe.py` changes (extra code sections, zero-run
+  cutoff, slack bytes, C++ continuations, smc branch lifted as written) against the Delta Force builds: both games and
+  their DLLs analysed and lifted with the tools before them (47f0a3d) and after, the lifted C compared function by
+  function. DF1 (Watcom, one code section): analysis identical (5263 functions); the only change is two "smc branch"
+  instructions, both data (a string at 0x491f14, a MASM variable block at 0x499e7f), now lifted as written instead of
+  `rt_unhandled`. DF2 has three code sections (`.text`, `_text`, `_TEXT`), so the zero-run cutoff and the slack apply:
+  2663 -> 2643 functions, coverage 94.6% -> 83.6% of the (larger) span; every instruction lost is zero-filled data,
+  alignment padding before it, a string, or two unreferenced debug routines at 0x4ab641/0x4ab6ab that only junk
+  fall-through reached (misaligned); no shared function changed except two data runs that now end in `rt_unhandled`;
+  2 smc fields fewer, both in data. The DLLs (Netsock, Cmprssh0, Hw_d3d) each gain one unreferenced junk function at
+  the end of `.text`'s VirtualSize (a gap seed in the slack). No C++ continuation was found in either game. Both games
+  were then played into a mission in test mode: DF1 Peru (16M colours), DF2 "Six of One" in Software and Hardware.
 
 ## Mac visual and performance review (2026-10-10)
 
