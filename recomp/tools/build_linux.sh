@@ -36,6 +36,9 @@ mkdir -p "$OUT/obj/rt/mojo"
 for f in "$HERE"/third_party/mojoshader/mojoshader.c "$HERE"/third_party/mojoshader/mojoshader_common.c "$HERE"/third_party/mojoshader/profiles/*.c; do
     "$CC" "${COMPAT_FLAGS[@]}" -c -O2 -fPIC -w "${MOJO[@]}" -o "$OUT/obj/rt/mojo/$(basename "$f" .c).o" "$f"
 done
+for f in "$HERE"/third_party/core-math/*.c; do   # correctly rounded tan/sin/cos/atan2 for the x87 instructions (rt.c)
+    "$CC" "${COMPAT_FLAGS[@]}" -c -O2 -fPIC -ffp-contract=off -w -o "$OUT/obj/rt/cm_$(basename "$f" .c).o" "$f"
+done
 for f in "$HERE/runtime/rt.c" "$HERE"/runtime/win32/*.c "$OUT/imptab.c"; do
     o="$OUT/obj/rt/$(basename "$f" .c).o"
     OPT=-O1; [[ $(basename "$f") == native.c ]] && OPT=-O3
