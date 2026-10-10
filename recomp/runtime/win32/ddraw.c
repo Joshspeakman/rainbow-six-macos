@@ -479,6 +479,13 @@ void dsr_present(Ctx *c, uint32_t id)           /* a finished frame: pacing, the
     uint32_t *p = cmd_begin(DSR_PRESENT, 16); p[0] = id; p[1] = (uint32_t)q; p[2] = (uint32_t)(q >> 32); p[3] = 1000000; cmd_end();
     cmd_frame();
 }
+void dsr_hold_frame(Ctx *c)                       /* a finished frame not shown (ddraw_pal.c): paced like one that is */
+{
+    { void w32_crash_heartbeat(int); w32_crash_heartbeat(0); }
+    #ifndef __linux__
+    cmd_cap_wait();
+    #endif
+}
 static void present(Ctx *c, DSurface *s) { dsr_present(c, s->id); }
 M(s_Flip, 3) ME(DSurface, O_SURF)
     DSurface *t = obj(ARG(1), O_SURF), *back = t ? t : (me->nattached ? me->attached[0] : me);
