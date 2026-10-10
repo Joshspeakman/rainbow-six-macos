@@ -230,7 +230,12 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (fno == a->frame + 20) post(0x201, 1, pos_lp());
         } else if (!strcmp(a->kind, "move") && fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
         else if (!strcmp(a->kind, "seq") && fno == a->frame) { extern int ds_seq_left; ds_seq_left = a->x; }
-        else if (!strcmp(a->kind, "rel") && fno >= a->frame && fno < a->frame + 60) rel_motion(a->x / 60.0, a->y / 60.0);   /* x,y over 60 frames, like a trackpad swipe */
+        else if (!strcmp(a->kind, "rel") && fno >= a->frame && fno - a->frame < 60) {
+            /* Test swipe: integer cumulative steps deliver exactly x,y. Repeated /60.0 could leave a whole
+             * pixel in the fractional accumulator (65 delivered only 64), drifting comparison cameras. */
+            int64_t k = fno - a->frame;
+            rel_motion((k + 1) * a->x / 60 - k * a->x / 60, (k + 1) * a->y / 60 - k * a->y / 60);
+        }
         else if (!strcmp(a->kind, "key")) {
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
             if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }

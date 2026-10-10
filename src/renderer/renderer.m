@@ -68,8 +68,10 @@ DSRRenderer *dsr_renderer_create(id<MTLDevice> dev)
     r->dev = dev; r->q = [dev newCommandQueue];
     r->lib = [dev newLibraryWithSource:shader_source() options:nil error:&err];
     if (!r->lib) { fprintf(stderr, "shader compile failed: %s\n", err.localizedDescription.UTF8String); exit(1); }
-    r->ring_size = 256u << 20; r->ring = [dev newBufferWithLength:r->ring_size options:MTLResourceStorageModeShared];
-    { uint32_t w = 0xffffffff; r->white = [dev newBufferWithBytes:&w length:16 options:MTLResourceStorageModeShared]; }
+    r->ring_size = 256u << 20;
+    { const char *mb = getenv("DSR_RINGMB"); if (mb && atoi(mb) >= 4 && atoi(mb) <= 256) r->ring_size = (uint32_t)atoi(mb) << 20; } // development: force frequent wraps
+    r->ring = [dev newBufferWithLength:r->ring_size options:MTLResourceStorageModeShared];
+    { uint32_t w[4] = {0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff}; r->white = [dev newBufferWithBytes:w length:sizeof w options:MTLResourceStorageModeShared]; }
     for (int k = 0; k < 32; k++) mat_ident(r->xf[k]);
     for (int k = 0; k < 256; k++) r->rs[k] = 0;
     r->rs[168] = 15; r->rs[56] = 8; r->rs[58] = r->rs[59] = 0xff; r->rs[53] = r->rs[54] = r->rs[55] = 1; r->rs[7] = 1; r->rs[14] = 1; r->rs[23] = 4; r->rs[22] = 3; r->rs[19] = 2; r->rs[20] = 1; r->rs[25] = 8;   // ZENABLE, ZWRITE, ZFUNC LEQUAL, CULL CCW, SRC ONE, DST ZERO, AFUNC ALWAYS
@@ -145,14 +147,33 @@ static void commit(DSRRenderer *r)
 }
 // Long resource-only stretches (level loading) would otherwise pile thousands of encoders into one command buffer.
 static void maybe_commit(DSRRenderer *r) { if (r->cb && (r->encoders > 512 || r->cb_bytes > (64u << 20))) commit(r); }
+static void ring_grow(DSRRenderer *r, uint64_t need)
+{
+    if (need <= r->ring_size) return;
+    uint64_t size = MAX((uint64_t)r->ring_size * 2, (need + 255) & ~255ull);
+    if (size > UINT32_MAX) { fprintf(stderr, "dsr: upload ring request too large: %llu\n", (unsigned long long)need); exit(1); }
+    commit(r); if (r->last_cb) [r->last_cb waitUntilCompleted];
+    id<MTLBuffer> buffer = [r->dev newBufferWithLength:(NSUInteger)size options:MTLResourceStorageModeShared];
+    if (!buffer) { fprintf(stderr, "dsr: cannot grow upload ring to %llu bytes\n", (unsigned long long)size); exit(1); }
+    r->ring = buffer; r->ring_size = (uint32_t)size; r->ring_off = 0;
+}
 static void *ring_alloc(DSRRenderer *r, uint32_t n, uint32_t *off)
 {
+    ring_grow(r, ((uint64_t)n + 255) & ~255ull);
     n = (n + 255) & ~255u;
-    if (r->ring_off + n > r->ring_size) {   // wrap: make sure the GPU is done with the old contents
+    if ((uint64_t)r->ring_off + n > r->ring_size) {   // wrap: make sure the GPU is done with the old contents
         commit(r); if (r->last_cb) [r->last_cb waitUntilCompleted];
         r->ring_off = 0;
     }
     *off = r->ring_off; r->ring_off += n; r->cb_bytes += n; return (uint8_t *)r->ring.contents + *off;
+}
+/* Reserve every allocation before binding draw state. A mid-draw wrap ends the encoder, and the replacement
+ * has no pipeline or vertex bindings. Include vertices, indices, constants and generated fan indices. */
+static void ring_room(DSRRenderer *r, uint64_t n)
+{
+    n += 6 * 256;                                   /* each allocation rounds up to 256 */
+    ring_grow(r, n);
+    if ((uint64_t)r->ring_off + n > r->ring_size) { commit(r); if (r->last_cb) [r->last_cb waitUntilCompleted]; r->ring_off = 0; }
 }
 static id<MTLBlitCommandEncoder> blit_enc(DSRRenderer *r)
 {
@@ -403,6 +424,9 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
                 into ? "draw into" : "add from", r->rt, t_ ? t_->w : 0, t_ ? t_->h : 0, fvf, nv, r->rs[28], r->rs[35], r->rs[140], r->rs[27], r->rs[19], r->rs[20], r->rs[168],
                 r->rs[7], r->rs[14], r->rs[60], r->tss[0][1], r->tss[0][2], r->tss[0][3], r->tss[0][4], r->tss[0][5], r->tss[0][6], r->tss[1][1], r->tss[1][4], r->tex[0]); } }
     Surf *rt = surf(r, r->rt), *ds = surf(r, r->ds); if (!rt) { dsr_stat[2]++; return; }
+    if (prim == 6 && (ni ? ni : nv) < 3) return;
+    ring_room(r, (uint64_t)nv * stride + (uint64_t)ni * 2 + sizeof(Uniforms)
+              + (prim == 6 ? (uint64_t)((ni ? ni : nv) - 2) * 6 : 0));
     id<MTLRenderPipelineState> pso = pipeline_for(r, fvf, ds != NULL); if (!pso) { dsr_stat[3]++; return; }
     id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, r->ds); if (!e) { dsr_stat[4]++; return; }
     void *vdst = ring_alloc(r, nv * stride, &voff); memcpy(vdst, p + 4, nv * stride);
@@ -512,6 +536,8 @@ static void draw_prog(DSRRenderer *r, const uint32_t *p, uint32_t size)
     if (prim == 6 && (ni ? ni : nv) < 3) return;
     if (r->cur_prog >= 1024 || !r->prog[r->cur_prog].vs) return;
     Surf *rt = surf(r, r->rt), *ds = surf(r, r->ds); if (!rt) { dsr_stat[2]++; return; }
+    ring_room(r, (uint64_t)nv * stride + (uint64_t)ni * 2 + (uint64_t)(r->npconst ? r->npconst : 1) * 16
+              + (prim == 6 ? (uint64_t)((ni ? ni : nv) - 2) * 6 : 0));
     id<MTLRenderPipelineState> pso = prog_pipeline(r, mask, ds != NULL); if (!pso) { dsr_stat[3]++; return; }
     id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, r->ds); if (!e) { dsr_stat[4]++; return; }
     void *vdst = ring_alloc(r, nv * stride, &voff); memcpy(vdst, p + 5, nv * stride);

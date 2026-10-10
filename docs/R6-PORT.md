@@ -1,7 +1,8 @@
 # Rainbow Six: port notes and Mac handoff
 
 State as of 2026-10-09. Done and verified on Linux (CachyOS, SDL2/OpenGL host) against the original GOG executable
-running under Wine in a headless gamescope (the `~/Projects/r6-coop/tools` scripts). The Mac side has not been compiled.
+running under Wine in a headless gamescope (the `~/Projects/r6-coop/tools` scripts). The Mac host is now built and runs;
+the historical handoff below is retained with its current status, and the 2026-10-10 review follows it.
 
 ## Building and running
 
@@ -124,16 +125,15 @@ non-blocking mode (Winsock behaviour; a blocking accepted socket stalled the nat
 - gdb: lifted code's line numbers are guest addresses (`break x86:<decimal>`); `Ctx *` is `$rdi` at a function's first
   instruction (`break *f_<addr>`); registers are spilled to it around calls.
 
-## Mac handoff: what remains
+## Original Mac handoff and current status
 
 1. `recomp/build_r6.sh "<game folder>"` on the Mac: `tools/build_runtime.sh`'s macOS branch passes
    `-DDF_EDITION -DR6_EDITION` and links `tools/build_app.sh` (`app/RainbowSix`); `./install.sh --game-dir` makes
-   `~/Applications/Rainbow Six.app`. Nothing of this has been compiled on macOS (the Delta Force Mac path hasn't either):
-   expect small fixes in Linux-first runtime files.
-2. `src/renderer/renderer.m` / `shaders.metal`: the keyed-blit mode 3 (`fs_quad`) is new and unbuilt. The world draws
-   use the existing fixed-function path with transforms (slots 1-3), which DF never exercised on Metal: check the first
-   frame of training against Linux.
-3. `cdaudio.c` opens its own `ds_audio_open` stream (Core Audio on the Mac): check it plays alongside DirectSound.
+   `~/Applications/Rainbow Six.app`. Completed on Apple Silicon, including the co-op executable and its launch window.
+2. `src/renderer/renderer.m` / `shaders.metal`: keyed-blit mode 3 (`fs_quad`), fixed-function transforms and training
+   render on Metal. The viewport and portal fixes described above are retained.
+3. `cdaudio.c` opens its own `ds_audio_open` stream (Core Audio on the Mac). The visual audit mutes audio; it does not
+   establish music/effects mixing parity.
 4. `net_ole.c`: the default-route address is found with a connected UDP socket's `getsockname` (works on macOS); macOS
    asks for local-network permission (Info.plist has `NSLocalNetworkUsageDescription`).
 
@@ -150,3 +150,46 @@ non-blocking mode (Winsock behaviour; a blocking accepted socket stalled the nat
 - Crash/hang reports still say "Dungeon Siege Native" and name the image DungeonSiege.exe (inherited, cosmetic).
 - `tools/analyze.py`/`lift.py` changes (zero-run cutoff, slack bytes, C++ continuations) apply to the Delta Force builds
   too and have not been re-checked there.
+
+## Mac visual and performance review (2026-10-10)
+
+The original-game reference is stock GOG 1.04 under Wine 11.19 on CachyOS with an RTX 3080 Ti, not native Windows.
+The stock executable SHA256 is `556ed69b7029d58852458afe1a11ce3aa95a3cf16d2bca43e5f322c6c8aec8a4`; the local stock
+copy and all 92 listed data assets match. The installed co-op executable is a different, patched file. Reference
+coverage is 640x480 Shooting Range I and the roof-open Single Room I training partitions, including night vision.
+The reference host selected 640x480 in the UI after an inherited 1920x1080 setting failed; the actual capture dimensions and
+UI establish the resolution. Force Software is off, but the exact fallback driver is not established. There is
+no water or enclosed campaign-interior reference in this set.
+
+The white vertex fallback now supplies all 16 bytes copied by Metal. Uploads grow the buffer when necessary, using
+64-bit extents, and both draw paths reserve their complete uploads before binding encoder state. This preserves
+the earlier fixed-function triangle-fan ordering fix. The generic programmable path also needed protection from
+wrapping its constants after pipeline binding; Rainbow Six itself uses fixed-function rendering. Default buffer
+capacity remains 256 MB; `DSR_RINGMB=4` enables development stress. `recomp/tests/metal_regressions.sh` runs actual
+Metal checks under ASAN/UBSAN for source bounds, oversized uploads, GPU copy, wrap and draw pixels. Before/after
+checks reproduce the old overread and out-of-range allocation; isolating the old programmable path with a safe
+initializer also reproduces its lost pipeline, rejected before an invalid GPU draw reaches the driver.
+
+The frame limiter now sleeps briefly before a short final spin instead of spinning for up to the last 2 ms.
+`recomp/tests/frame_wait_test.c` separates wait CPU cost from the renderer/game workload. No simulation, math,
+projection, portal or shader behavior changes are part of this update.
+
+On this M1 Pro, the isolated wait benchmark reports 60 Hz CPU cost of 1.280 to 0.198 ms/frame and 120 Hz cost
+of 1.045 to 0.113 ms/frame. This is not a full-game benchmark. Both old and revised co-op builds hold about
+120 submitted FPS in the static 640x480 range view, GPU about 0.6 ms. Single 15-second whole-process CPU
+observations are 23.79% and 23.46% of one core: essentially unchanged, so no live FPS or CPU improvement is
+claimed. This older host reports submitted FPS, not separate on-screen presentation timestamps.
+
+The `DS_TEST` relative-mouse action now distributes integer pixel totals over its 60 frames. Repeated floating
+division could retain a whole pixel in its fractional accumulator (a request of 65 delivered only 64), shifting
+comparison cameras. This changes scripted tests only. The reference host's recorded range setup also includes an upward
+mouse adjustment; unadjusted starting views look down. Captures require camera and message-timing qualification,
+not blanket pixel-identical claims.
+
+The separate stock build reproduces the range's sky, lamps, wooded perimeter and gravel, plus the room's lit/dark
+wall faces, floor, doors and green night vision. Both stock and co-op training runs exit normally. The stock
+4 MB run covers over 230,000 draws with zero reported drops; checked quiet intervals remain about 120 submitted
+FPS, with GPU roughly 0.6–1.3 ms across these views. A close-wall night-vision capture taken about half a second
+after toggling is almost black; later captures at the same position become green as the transition settles.
+The transition capture is retained as timing evidence, not reported as a missing shader. Audio is muted, and
+campaign, co-op networking and water are not covered by this visual run.
