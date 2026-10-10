@@ -27,7 +27,7 @@ static void socket_no_sigpipe(int fd)
 #define INVALID_SOCKET_ 0xffffffffu
 #define SOCKET_ERROR_ 0xffffffffu
 enum { MAXS = 256, SBASE = 0x1000 };
-static struct { int fd; int nb; } S[MAXS];
+static struct { int fd; int nb; int connecting; } S[MAXS];   /* connecting: a non-blocking connect not yet seen to finish */
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static uint32_t wsa_err(int e)
@@ -93,7 +93,7 @@ IMPL(wsock32, ord23)                                    /* socket(af, type, prot
     socket_no_sigpipe(fd);
     fcntl(fd, F_SETFD, FD_CLOEXEC);
     pthread_mutex_lock(&s_lock); int k = 0; while (k < MAXS && S[k].fd) k++;
-    if (k < MAXS) { S[k].fd = fd + 1; S[k].nb = 0; }
+    if (k < MAXS) { S[k].fd = fd + 1; S[k].nb = 0; S[k].connecting = 0; }
     pthread_mutex_unlock(&s_lock);
     if (k == MAXS) { close(fd); w32_set_last_error(c, 10024); RET(INVALID_SOCKET_, 3); }
     RET(SBASE + (uint32_t)k, 3);
@@ -114,7 +114,10 @@ IMPL(wsock32, ord4)                                     /* connect(s, addr, len)
 {
     SOCK(ARG(0), 3); struct sockaddr_in a; if (!to_host(ARG(1), ARG(2), &a)) RET(fail(c, 10014), 3);
     if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: connect %x to %s:%u (fd %d)\n", ARG(0), ip, ntohs(a.sin_port), fd); }
-    if (connect(fd, (struct sockaddr *)&a, sizeof a)) RET(fail_errno(c), 3);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a)) {
+        if (errno == EINPROGRESS && ARG(0) >= SBASE && ARG(0) < SBASE + MAXS) { pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].connecting = 1; pthread_mutex_unlock(&s_lock); }
+        RET(fail_errno(c), 3);
+    }
     RET(0, 3);
 }
 IMPL(wsock32, ord13) { SOCK(ARG(0), 2); if (listen(fd, (int)ARG(1))) RET(fail_errno(c), 2); RET(0, 2); }   /* listen */
@@ -128,7 +131,7 @@ IMPL(wsock32, ord1)                                     /* accept(s, addr, len*)
      * host polls the accepted socket with recv; blocking there stalled its game loop on every exchange) */
     int nb = (fcntl(fd, F_GETFL) & O_NONBLOCK) != 0;
     pthread_mutex_lock(&s_lock); int k = 0; while (k < MAXS && S[k].fd) k++;
-    if (k < MAXS) { S[k].fd = n + 1; S[k].nb = nb; }
+    if (k < MAXS) { S[k].fd = n + 1; S[k].nb = nb; S[k].connecting = 0; }
     pthread_mutex_unlock(&s_lock);
     if (k == MAXS) { close(n); w32_set_last_error(c, 10024); RET(INVALID_SOCKET_, 3); }
     if (nb) fcntl(n, F_SETFL, fcntl(n, F_GETFL) | O_NONBLOCK); else fcntl(n, F_SETFL, fcntl(n, F_GETFL) & ~O_NONBLOCK);
@@ -275,11 +278,21 @@ IMPL(wsock32, ord18)
         for (uint32_t i = 0; i < cnt; i++) {
             uint32_t s = rt_r32(G_MEM, sets[k] + 4 + 4 * i); int j = 0; while (j < n && who[j] != s) j++;
             short re = j < n ? pf[j].revents : 0;
-            int hit = k == 0 ? (re & (POLLIN | POLLHUP | POLLERR)) != 0 : k == 1 ? (re & POLLOUT) != 0 : (re & (POLLPRI | POLLERR)) != 0;
+            /* Windows reports a closed or reset connection only as readable; the except set means out-of-band data or a
+             * failed non-blocking connect. macOS's poll adds POLLPRI to POLLHUP when the other end closes (Diablo II's
+             * network thread, which skips except-set sockets unread, then spun until it crashed at exit: diablo-2-macos#2) */
+            int connecting = 0;
+            if (k == 2 && (re & POLLERR)) { pthread_mutex_lock(&s_lock); if (s >= SBASE && s < SBASE + MAXS) connecting = S[s - SBASE].connecting; pthread_mutex_unlock(&s_lock); }
+            int hit = k == 0 ? (re & (POLLIN | POLLHUP | POLLERR)) != 0 : k == 1 ? (re & POLLOUT) != 0
+                    : ((re & POLLPRI) && !(re & POLLHUP)) || ((re & POLLERR) && connecting);
             if (hit) { rt_w32(G_MEM, sets[k] + 4 + 4 * out, s); out++; total++; }
         }
         rt_w32(G_MEM, sets[k], out);
     }
+    for (int i = 0; i < n; i++)                                       /* a pending connect that is now writable has finished */
+        if ((pf[i].revents & POLLOUT) && !(pf[i].revents & (POLLERR | POLLHUP)) && who[i] >= SBASE && who[i] < SBASE + MAXS) {
+            pthread_mutex_lock(&s_lock); S[who[i] - SBASE].connecting = 0; pthread_mutex_unlock(&s_lock);
+        }
     RET(total, 5);
 }
 IMPL(wsock32, ord151)                                   /* __WSAFDIsSet(s, set) */
