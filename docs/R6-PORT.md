@@ -94,6 +94,10 @@ non-blocking mode (Winsock behaviour; a blocking accepted socket stalled the nat
   (the view places its layer proportionally: 640x480 menus are pillarboxed; measured 2971 px wide on a 3456x2234 screen).
 - Viewports: a device keeps 64 (`dv_AddViewport`); with 8 the mission's 3D viewport was dropped, its per-frame Clear
   skipped and stale depth hid geometry (the M01 fire escape). Found and fixed on the Mac (9130ccc).
+- Door and window portals: the game draws what lies beyond an opening through a small viewport whose D3DVIEWPORT2 clip
+  volume is that opening's part of the whole view. The projection reaches the renderer composed with that mapping
+  (`xf_emit`); ignoring it squeezed the whole view into every doorway (cd0d41e, from the Mac). Check native frames
+  against Wine frames of the same room, not just "the room is there".
 
 ## Verified on Linux
 
