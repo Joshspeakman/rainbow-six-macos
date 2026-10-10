@@ -18,6 +18,7 @@ void cmd_end(void);
 static unsigned dbg_draws, dbg_clears;   /* W32_DBG_PRESENT=1: frames with under a third of the previous frame's draws (a blank 3D view) */
 static unsigned world_draws;             /* this frame's D3DVT_LVERTEX draws (the 3D world) */
 static unsigned portal_draws;            /* this frame's world draws through a doorway's clip volume */
+static unsigned frame_vpsets;            /* this frame's SetViewport2 calls (the game sets one per doorway view) */
 static unsigned dbg_clipdraws, dbg_vpsets;   /* W32_DBG_FRAMESTATS */
 void dsr_present(Ctx *c, uint32_t id);
 uint32_t next_object_id(void);
@@ -537,17 +538,21 @@ M(s_Flip, 3) ME(PSurf, T_SURF)                                      /* (target o
 #ifdef R6_EDITION
         {   /* A spectator camera crossing a doorway sits for one frame just inside the new room facing back through the
              * doorway; the game then draws only that room, through no doorway view, and the 3D view is blank (the original
-             * does it too). Such a frame (world draws, fewer than the last frame's, none through a doorway's clip volume,
-             * after a frame that had some) is not shown: the previous image stays one frame more. R6_HOLD_BLANK=0 shows it. */
-            static unsigned shown_world, shown_portal, held; static int on = -1; if (on < 0) on = !getenv("R6_HOLD_BLANK") || atoi(getenv("R6_HOLD_BLANK")) != 0;
-            hold = on && world_draws && shown_portal && !portal_draws && world_draws < shown_world && held < 6;   /* the game draws a tick
-                                                                              * several times (3 at 120 fps); 6 frames at most */
-            if (hold) held++; else { held = 0; shown_world = world_draws; shown_portal = portal_draws; }
-            world_draws = portal_draws = 0;
+             * does it too). Such frames are not shown (the previous image stays, 45 ms at most). R6_HOLD_BLANK=0 shows them. */
+            static unsigned shown_world, shown_portal, shown_vpsets; static uint64_t held_since; static int on = -1;
+            if (on < 0) on = !getenv("R6_HOLD_BLANK") || atoi(getenv("R6_HOLD_BLANK")) != 0;
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); uint64_t now = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+            /* the blank tick: no doorway draws after a shown frame with some, fewer world draws, and the viewport count falls to
+             * the 4 a frame without doorway views sets (a doorway merely leaving view keeps its 6-8); held one tick at most */
+            hold = on && world_draws && shown_portal && !portal_draws && world_draws < shown_world && frame_vpsets <= 4 && frame_vpsets < shown_vpsets
+                   && (!held_since || now - held_since < 45);
+            if (hold) { if (!held_since) held_since = now; }
+            else { held_since = 0; shown_world = world_draws; shown_portal = portal_draws; shown_vpsets = frame_vpsets; }
+            world_draws = portal_draws = frame_vpsets = 0;
             if (hold && getenv("W32_DBG_PRESENT")) fprintf(stderr, "held frame %u\n", ddraw_pal_frames);
         }
 #endif
-        ddraw_pal_frames++; if (!hold) dsr_present(c, b->gid);
+        ddraw_pal_frames++; if (!hold) dsr_present(c, b->gid); else { void dsr_hold_frame(Ctx *); dsr_hold_frame(c); }
 #ifdef R6_EDITION
         if (me->gid && !getenv("R6_FLIP_NOSWAP")) {                 /* as DirectDraw does: the buffers trade places (the game redraws only what changed) */
             uint32_t t = me->gid; me->gid = b->gid; b->gid = t; int n = me->gpu_newer; me->gpu_newer = b->gpu_newer; b->gpu_newer = n;
@@ -1213,7 +1218,7 @@ static PDev *dev_of_vp(PVp *v)
 M(vp_SetViewport2, 2) ME(PVp, T_VP)                                      /* D3DVIEWPORT2 (or D3DVIEWPORT: the same x, y, w, h, z range) */
     for (int k = 0; k < 11; k++) me->data[k] = rt_r32(G_MEM, ARG(1) + 4 * (uint32_t)k);
     { static int n; if (n++ < 8) { float f[6]; memcpy(f, me->data + 5, 24); dlog("SetViewport%s %u,%u %ux%u | %g %g %g %g | z %g..%g", rt_r32(G_MEM, ARG(0)) == vt_vp ? "" : "?", me->data[1], me->data[2], me->data[3], me->data[4], f[0], f[1], f[2], f[3], f[4], f[5]); } }
-    dbg_vpsets++;
+    dbg_vpsets++; frame_vpsets++;
     me->set = 1; PDev *d = dev_of_vp(me); if (d && d->vp == me) dev_viewport(d);
     RET(DD_OK, 2);
 END
