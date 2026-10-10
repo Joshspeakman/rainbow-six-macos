@@ -677,12 +677,42 @@ M(dd_CreateSurface, 4) ME(PDraw, T_DD)                              /* (desc, ou
     rt_w32(G_MEM, ARG(2), s->g[sv]); RET(DD_OK, 4);
 END
 NOT_M(dd_DuplicateSurface, 3)
-static const uint16_t modes[][2] = {{640, 480}, {800, 600}, {1024, 768}};
+#ifdef R6_EDITION
+/* Rainbow Six (the co-op mod lifts the game's 1024x768 limit): the usual sizes of every shape, plus the desktop's own;
+ * the window shows any of them letterboxed */
+static const uint16_t modes_std[][2] = {{640, 480}, {800, 600}, {1024, 768}, {1152, 864}, {1280, 720}, {1280, 800},
+    {1280, 960}, {1280, 1024}, {1366, 768}, {1440, 900}, {1600, 900}, {1600, 1200}, {1680, 1050}, {1920, 1080},
+    {1920, 1200}, {2560, 1080}, {2560, 1440}, {2560, 1600}, {3440, 1440}, {3840, 1600}, {3840, 2160}};
+static size_t mode_list(uint16_t (*out)[2])
+{
+    size_t n = 0; int desk = 0;
+    for (size_t k = 0; k < sizeof modes_std / sizeof *modes_std; k++) {
+        out[n][0] = modes_std[k][0]; out[n][1] = modes_std[k][1];
+        if (out[n][0] == w32_screen_w && out[n][1] == w32_screen_h) desk = 1;
+        n++;
+    }
+    if (!desk && w32_screen_w >= 640 && w32_screen_h >= 480 && w32_screen_w <= 8192 && w32_screen_h <= 8192) {
+        size_t at = 0;                                              /* in order of width, then height */
+        while (at < n && (out[at][0] < w32_screen_w || (out[at][0] == w32_screen_w && out[at][1] < w32_screen_h))) at++;
+        for (size_t k = n; k > at; k--) { out[k][0] = out[k - 1][0]; out[k][1] = out[k - 1][1]; }
+        out[at][0] = (uint16_t)w32_screen_w; out[at][1] = (uint16_t)w32_screen_h; n++;
+    }
+    return n;
+}
+#else
+static const uint16_t modes_std[][2] = {{640, 480}, {800, 600}, {1024, 768}};
+static size_t mode_list(uint16_t (*out)[2])
+{
+    for (size_t k = 0; k < sizeof modes_std / sizeof *modes_std; k++) { out[k][0] = modes_std[k][0]; out[k][1] = modes_std[k][1]; }
+    return sizeof modes_std / sizeof *modes_std;
+}
+#endif
 M(dd_EnumDisplayModes, 5) ME(PDraw, T_DD)                           /* (flags, desc filter, ctx, callback) */
     uint32_t filter = ARG(2), ctx = ARG(3), cb = ARG(4), v = (uint32_t)vidx_of_this(c, vt_dd), size = v >= 2 ? 124 : 108;
     uint32_t d = heap_alloc(w32_process_heap, 8, 124);
     static const uint32_t depths[] = {8, 16, 32};
-    for (int di = 0; di < 3; di++) for (size_t k = 0; k < sizeof modes / sizeof *modes; k++) {
+    uint16_t modes[sizeof modes_std / sizeof *modes_std + 1][2]; size_t nmodes = mode_list(modes);
+    for (int di = 0; di < 3; di++) for (size_t k = 0; k < nmodes; k++) {
         uint32_t w = modes[k][0], h = modes[k][1], bpp = depths[di];
         if (filter) { uint32_t ff = rt_r32(G_MEM, filter + SD_FLAGS);
             if ((ff & DDSD_WIDTH) && rt_r32(G_MEM, filter + SD_WIDTH) != w) continue;

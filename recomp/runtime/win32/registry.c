@@ -208,6 +208,16 @@ IMPL(advapi32, RegQueryValueExA)
     uint32_t name = ARG(1), type = ARG(3), data = ARG(4), szp = ARG(5);
     RKey *k = key_of(ARG(0)); if (!k) RET(6, 6);
     const char *n = name ? GS(name) : "";
+#ifdef R6_EDITION
+    /* Rainbow Six's windowed mode presents with a Blt to the primary surface, which the host never shows: the game always
+     * runs "full screen", and the host's own window is the window (DS_WINDOW_MODE, set by the launcher's Screen row) */
+    if (!strcasecmp(n, "FullScreen")) {
+        if (type) rt_w32(G_MEM, type, 1);
+        if (data) { if (!szp || rt_r32(G_MEM, szp) < 5) { if (szp) rt_w32(G_MEM, szp, 5); RET(234, 6); } memcpy(GP(data), "TRUE", 5); }
+        if (szp) rt_w32(G_MEM, szp, 5);
+        RET(0, 6);
+    }
+#endif
     for (int j = 0; j < k->nv; j++) if (!strcasecmp(k->v[j].name, n)) {
         RVal *v = &k->v[j];
         if (type) rt_w32(G_MEM, type, v->type);
