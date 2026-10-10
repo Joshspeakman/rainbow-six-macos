@@ -15,6 +15,9 @@
 uint32_t *cmd_begin(uint32_t op, uint32_t payload);   /* ddraw.c: the command ring to the renderer */
 void cmd_end(void);
 static unsigned dbg_draws, dbg_clears;   /* W32_DBG_PRESENT=1: frames with under a third of the previous frame's draws (a blank 3D view) */
+static unsigned world_draws;             /* this frame's D3DVT_LVERTEX draws (the 3D world) */
+static unsigned portal_draws;            /* this frame's world draws through a doorway's clip volume */
+static unsigned dbg_clipdraws, dbg_vpsets;   /* W32_DBG_FRAMESTATS */
 void dsr_present(Ctx *c, uint32_t id);
 uint32_t next_object_id(void);
 void w32_set_window_pos(Ctx *c, uint32_t hwnd, int x, int y, int cx, int cy, uint32_t fl);
@@ -491,7 +494,22 @@ M(s_Flip, 3) ME(PSurf, T_SURF)                                      /* (target o
                         FILE *o = fopen(f, "wb"); if (o) { fwrite(px, 4, (size_t)b->w * b->h, o); fclose(o); } }
                     free(px); if (++burst == 12) burst = -1; } } }
         if (getenv("W32_DBG_PRESENT")) { static unsigned pw; if (dbg_draws < pw / 3 && pw > 30) fprintf(stderr, "lowpresent %u: %u draws %u clears (prev %u) tid %x front %u back %u\n", ddraw_pal_frames, dbg_draws, dbg_clears, pw, w32_tid(c), me->gid, b->gid); pw = dbg_draws; dbg_draws = dbg_clears = 0; }
-        ddraw_pal_frames++; dsr_present(c, b->gid);
+        if (getenv("W32_DBG_FRAMESTATS")) { fprintf(stderr, "fs %u world %u clipped %u vpsets %u\n", ddraw_pal_frames, world_draws, dbg_clipdraws, dbg_vpsets); dbg_clipdraws = dbg_vpsets = 0; }
+        int hold = 0;
+#ifdef R6_EDITION
+        {   /* A spectator camera crossing a doorway sits for one frame just inside the new room facing back through the
+             * doorway; the game then draws only that room, through no doorway view, and the 3D view is blank (the original
+             * does it too). Such a frame (world draws, fewer than the last frame's, none through a doorway's clip volume,
+             * after a frame that had some) is not shown: the previous image stays one frame more. R6_HOLD_BLANK=0 shows it. */
+            static unsigned shown_world, shown_portal, held; static int on = -1; if (on < 0) on = !getenv("R6_HOLD_BLANK") || atoi(getenv("R6_HOLD_BLANK")) != 0;
+            hold = on && world_draws && shown_portal && !portal_draws && world_draws < shown_world && held < 6;   /* the game draws a tick
+                                                                              * several times (3 at 120 fps); 6 frames at most */
+            if (hold) held++; else { held = 0; shown_world = world_draws; shown_portal = portal_draws; }
+            world_draws = portal_draws = 0;
+            if (hold && getenv("W32_DBG_PRESENT")) fprintf(stderr, "held frame %u\n", ddraw_pal_frames);
+        }
+#endif
+        ddraw_pal_frames++; if (!hold) dsr_present(c, b->gid);
 #ifdef R6_EDITION
         if (me->gid && !getenv("R6_FLIP_NOSWAP")) {                 /* as DirectDraw does: the buffers trade places (the game redraws only what changed) */
             uint32_t t = me->gid; me->gid = b->gid; b->gid = t; int n = me->gpu_newer; me->gpu_newer = b->gpu_newer; b->gpu_newer = n;
@@ -888,7 +906,7 @@ static void dev_draw(PDev *d, uint32_t prim, uint32_t vt, uint32_t verts, uint32
                  d->rs[21], d->rs[15], d->rs[41], t ? t->w : 0, t ? t->h : 0, t ? t->bpp : 0, t ? t->pf[7] : 0, t ? t->has_ck : 0, d->tss[0][1], d->tss[0][2], d->tss[0][3],
                  d->tss[0][4], d->tss[0][5], d->tss[0][6], nv); }
     }
-    dbg_draws++;
+    dbg_draws++; if (vt == 2) { world_draws++; if (vp_clip[2] != 2 || vp_clip[3] != 2) portal_draws++, dbg_clipdraws++; }
     if (!d->rt || !d->rt->gid || !nv) return;
     uint32_t fvf = legacy_fvf(vt), stride = fvf_stride(fvf), vbytes = nv * stride, ibytes = (ni * 2 + 3) & ~3u;
     int lvertex = fvf == 0x1e2;                                       /* D3DLVERTEX: its reserved dword after the position is dropped */
@@ -1145,6 +1163,7 @@ static PDev *dev_of_vp(PVp *v)
 M(vp_SetViewport2, 2) ME(PVp, T_VP)                                      /* D3DVIEWPORT2 (or D3DVIEWPORT: the same x, y, w, h, z range) */
     for (int k = 0; k < 11; k++) me->data[k] = rt_r32(G_MEM, ARG(1) + 4 * (uint32_t)k);
     { static int n; if (n++ < 8) { float f[6]; memcpy(f, me->data + 5, 24); dlog("SetViewport%s %u,%u %ux%u | %g %g %g %g | z %g..%g", rt_r32(G_MEM, ARG(0)) == vt_vp ? "" : "?", me->data[1], me->data[2], me->data[3], me->data[4], f[0], f[1], f[2], f[3], f[4], f[5]); } }
+    dbg_vpsets++;
     me->set = 1; PDev *d = dev_of_vp(me); if (d && d->vp == me) dev_viewport(d);
     RET(DD_OK, 2);
 END
