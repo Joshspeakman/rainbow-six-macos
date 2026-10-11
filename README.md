@@ -52,14 +52,14 @@ The project builds from whichever `RainbowSix.exe` is in your game folder.
   either side hosting. Windows players on stock 1.04 should be able to join in the same way, but that hasn't been
   tested against a real Windows PC.
 
-The build recognises the stock file by its SHA-256 (`recomp/r6_stock.sha256`, `556ed69b…c8aec8a4`) and prints
+The build recognises the stock file by its SHA-256 (`recomp/r6_stock.sha256`, `556ed69b7029d58852458afe1a11ce3aa95a3cf16d2bca43e5f322c6c8aec8a4`) and prints
 `RainbowSix.exe: stock GOG 1.04`. Any other `RainbowSix.exe` is still built, with the note `not the stock GOG 1.04
 file: patched?`. To make the build refuse anything but one exact file, set `R6_EXE_SHA=<sha256>`.
 
 **The co-op mod ("Co-op Edition")** is a separate project for cross-platform co-op: a mod patched into
 `RainbowSix.exe` that adds its own co-op features on top of the game's multiplayer. Windows players run the patched
 file as it is; Mac and Linux players build it with this port. The mod is **not published**, so this isn't available
-yet. The port already supports it: nothing here needs to change when it is released.
+yet. The port includes support for its launcher specification; compatibility with a future mod release has not been verified.
 
 With the mod's `RainbowSix.exe` and its `r6coop-launcher.json` in the game folder, you also get:
 
@@ -79,8 +79,9 @@ own Options screen.
 - An **internet connection on the first build**. The build creates a Python environment in `recomp/.venv` and installs
   Capstone (the disassembler the recompiler uses) and Unicorn into it with pip.
 - **Your own copy of Rainbow Six from GOG**, version 1.04 (the version GOG sells).
-- Time: the first build analyses, translates and compiles the whole game. Expect several minutes; it took around
-  3 to 6 minutes on the machines tested. It runs 16 compile jobs at a time; `R6_BUILD_JOBS=<n>` changes that.
+- Build time and peak disk use have not been verified for a clean install. Allow room for your game files,
+  generated source and object files, and the app; time varies with the Mac. The first build
+  analyses, translates and compiles the whole game. It runs 16 compile jobs at a time; `R6_BUILD_JOBS=<n>` changes that.
 
 ## Getting the game files onto a Mac
 
@@ -113,6 +114,8 @@ not used; the port plays the music itself.
 
 ## Install
 
+Keep the clone in a path without spaces: the current compile scripts split source paths on whitespace.
+
 ```sh
 git clone https://github.com/Joshspeakman/rainbow-six-macos.git
 cd rainbow-six-macos
@@ -141,7 +144,7 @@ share it.
 | `~/Applications/Rainbow Six.app` | the app |
 | `~/Games/RainbowSixNative/registry.txt` | the game's options (on Windows these live in the registry) |
 | `~/Games/RainbowSixNative/game/` | everything the game writes: saved campaigns, plans, the key map (`sherman.kmp`), its own `Sherman.log` |
-| `~/Games/RainbowSixNative/RainbowSix.log` | the port's log (moved to `RainbowSix.old.log` once it passes 5 MB) |
+| `~/Games/RainbowSixNative/RainbowSix.log` | the port's log (moved to `RainbowSix.old.log` at the next launch after it exceeds 5 MB) |
 | `~/Games/RainbowSixNative/CrashReports/` | crash and freeze reports |
 | `recomp/work/r6/` | the build folder, in your clone |
 
@@ -209,7 +212,8 @@ git pull
 ./install.sh --game-dir "/path/to/Rainbow Six"
 ```
 
-This rebuilds the game and replaces the app. Your settings and saves in `~/Games/RainbowSixNative` stay.
+Repeat any `--app-dir` and `--data-dir` options from the original install. This rebuilds the game and replaces
+the app. Your settings and saves in the selected data folder stay.
 
 The `main` branch is the stable one. `nightly` gets new work first: `git checkout nightly` to try it.
 

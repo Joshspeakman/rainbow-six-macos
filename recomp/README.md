@@ -1,91 +1,75 @@
 # Recompiler: Rainbow Six as native code
 
-Static recompilation of the user's own `RainbowSix.exe` (GOG 1.04, or that file with a mod patched in) and the
-`SMACKW32.DLL` from the game folder into C, compiled for Apple Silicon or Linux x86-64. Nothing derived from the game is
-committed: `build_r6.sh` regenerates everything locally from the user's files. Installing and playing:
-[README](../README.md); what was specific to this game (Direct3D 2 from DirectX 5, colour-keyed blits, C++ exceptions,
-door portals, CD audio, patched executables with extra code sections): [docs/R6-PORT.md](../docs/R6-PORT.md).
+Static recompilation of the user's own `RainbowSix.exe` (GOG 1.04, or that file with a mod patched in) and
+`SMACKW32.DLL` into C, compiled for Apple Silicon or Linux x86-64. The build regenerates its output locally under
+`recomp/work/` (git-ignored). Installing and playing: the [root README](../README.md). Game-specific implementation
+and testing notes: [docs/R6-PORT.md](../docs/R6-PORT.md).
+
+## Building by hand
+
+From the repository root, in a clone whose path contains no spaces:
 
 ```sh
-recomp/build_r6.sh "/path/to/Rainbow Six"        # -> recomp/work/r6 (several minutes; R6_BUILD_JOBS=<n>, default 16)
-R6_RELINK=1 recomp/build_r6.sh "/path/to/Rainbow Six"   # runtime or host changes only
+recomp/build_r6.sh "/path/to/Rainbow Six"             # -> recomp/work/r6/app/RainbowSix (Mac) or RainbowSixLinux
+R6_RELINK=1 recomp/build_r6.sh "/path/to/Rainbow Six" # runtime or host changes only, after a full build
 ```
 
-The repository started as the Delta Force port, and `build_df.sh` and [docs/DF-PORT.md](../docs/DF-PORT.md) still
-build and describe Delta Force and Delta Force 2 from their Steam copies. The sections below describe the recompiler
-as inherited from the Dungeon Siege II port (its execution model, flags, x87, indirect calls and test harnesses apply
-unchanged); the numbers, file names and options in them are Dungeon Siege II's, and some (Direct3D 9, Miles, DirectPlay)
-do not apply to Rainbow Six. Two things have changed since: x87 `fsin`/`fcos`/`fptan`/`fpatan` now use correctly
-rounded CORE-MATH routines (`third_party/core-math`), so they give the same bits on every host, and the analysis
-accepts executables with more than one code section.
+Build time and peak disk use have not been verified for a clean install. `R6_BUILD_JOBS=<n>` sets the parallel
+compile jobs (default 16). The first build creates `recomp/.venv` and installs Capstone and Unicorn with pip.
 
-## Status
+`build_r6.sh` prints whether the executable matches the stock GOG 1.04 SHA-256 in `r6_stock.sha256`:
 
-| Step | State |
+```
+556ed69b7029d58852458afe1a11ce3aa95a3cf16d2bca43e5f322c6c8aec8a4
+```
+
+Other executables are accepted by default; that is not a compatibility guarantee. Set `R6_EXE_SHA=<sha256>` to
+require one exact file. `R6_RELINK=1` also checks that the executable matches the previous lift's `lifted.sha256`.
+
+| Step | Implementation |
 |---|---|
-| Analysis (`tools/analyze.py`) | 85,833 functions, 97.1% of `.text`; 479 jump tables resolved, 73 bounded heuristically |
-| Lifter (`tools/lift.py`), runtime core (`runtime/`) | the whole executable and its DLLs compile and link (89,293 functions) |
-| Win32 layer (`runtime/win32`): loader, memory, heaps, threads, SEH, files, registry, USER32 (with timers), GDI, DbgHelp, WSOCK32 (`winsock.c`) | working |
-| Direct3D 9 (`d3d9.c`, `d3d9_fmt.c`) on the Metal renderer (`../src/renderer`), D3DX textures (`d3dx9.c`) | working: fixed function, and the game's HLSL effects compiled to Metal (`hlsl.c`, `d3dx9_fx.c`) |
-| Miles 6.6g (`mss32.dll` and its providers) and Bink, recompiled from the game folder; DirectSound over Core Audio | working |
-| App bundle, installer (`../install.sh`), launch window (`host/launcher.m`; Rainbow Six: `host/r6_launcher.m`, from the co-op mod's r6coop-launcher.json) | working |
-| Multiplayer (DirectPlay 8, GameSpy lobby on OpenSpy) | switched back on: the lobby works with an original CD key; hosting and joining untested (Dungeon Siege II's notes, not in this repository) |
+| Analysis | `tools/analyze.py`: writes `analysis.json` and `analysis.log`; handles multiple executable sections, including code added by a mod. `R6_SEEDS=<file>` supplies extra hexadecimal function addresses. |
+| Lifting | `tools/lift.py --game r6`: translates the executable, then `SMACKW32.DLL`; `tools/link_tables.py` combines their function and import tables. |
+| Compilation | `tools/cc1.sh`: compiles the generated C. A normal build removes the previous object directory and recompiles it. |
+| Runtime and host | `tools/build_runtime.sh`: selects `R6_EDITION` with the shared `DF_EDITION` profile. On macOS it calls `tools/build_app.sh`; on Linux it calls `tools/build_linux.sh`. |
 
-The recompiled game runs without Wine or Rosetta: intro, menus, new hero, the campaign, saving and loading.
+## Runtime and launcher
 
-Test mode: `DS_TEST=1` (background window, no mouse capture, no launch window), `W32_AUDIO_MUTE=1`,
-`DS_SCRIPT="@20:click:402,264;@30:shot:/tmp/a.png"` (scripted input in the game's display-mode coordinates; also
-`move`, `rclick`, `press`, `key`, `type`), `DS_RESOLUTION=WxH`. Logs: `D3D9_LOG=1|2` (Direct3D calls), `D3D9_FPS=1`,
-`W32_TRACE=<file>` (every Windows call), `W32_SEHLOG=1` (exceptions and the SEH chain), `W32_VMLOG=1`,
-`W32_REGLOG=1` (registry keys not found), `W32_AUDIOLOG=1`. Crash and hang reports go to `<data>/CrashReports`.
+- `runtime/rt.c`, `rt.h`, `rt_sse.h`: the CPU execution model.
+- `runtime/win32/`: the Windows APIs, files and registry, DirectDraw/Direct3D, DirectSound and Winsock; Rainbow Six
+  has its own imports in `r6_imports.c`. GOG's CD-audio replacement DLLs are not lifted: the runtime plays
+  `MUSIC/TrackNN.ogg` itself. Voxware voice chat is unavailable.
+- `host/main.m`, `host/r6_launcher.m`: the Mac host and launch window; `../src/renderer` draws with Metal.
+  Without the separate mod's `r6coop-launcher.json`, the launch window has Play and Quit. With it, settings come
+  from that specification and the Mac additions described in the root README.
+- `host/linux.c`, `host/linux_launcher/r6_launcher.py`: the Linux host and optional PySide6 mod launcher.
+- Settings are stored in `<data>/registry.txt`; game-folder writes, including `sherman.kmp`, go into `<data>/game/`.
+  Crash and hang reports go into `<data>/CrashReports/`. The installed Mac launcher writes `<data>/RainbowSix.log`.
 
-Shader effects (`runtime/win32/hlsl.c`, `d3dx9_fx.c`; the game's Options → Video → Shaders, saved as `shaders = ...` in
-`Save/prefs.gas`): `DS2_SHADERS=0` turns them off (the Radeon 8500 identity, fixed function only). Development:
-`FX_PARAMLOG=1` (each parameter's first and first non-zero value), `FX_FOGLOG=1` (fog parameter changes),
-`FX_DUMP=n` (every parameter at the first n passes of each effect), `D3D9_TEXLOG=n` (texture binding during effect
-passes), `HLSL_MAGENTA=1` (effect pixels drawn magenta), `DSR_FXPATCH="old=>new||old=>new"` (text replaced in every
-effect program's Metal before compiling), `DSR_FXTEXLOG=n` (fog, alpha and textures at effect draws), `DSR_RTLOG=n`
-(render target changes and clears), `DSR_SHOWSURF=<surface id>` (that surface drawn in the screen's corner),
-`DSR_GLOWLOG=1` (draws into and out of effect render targets, which are shown in the screen's corner),
-`D3D9_FXSTATELOG=1` (states the game changes between an effect's Begin and End that the effect doesn't own).
-`D3D9_STATELOG=1` (each render and stage state value the game uses, once). `tests/hlsl_check.m` compiles every pass of
-`.fx` files with Metal (`HLSL_DUMP=<technique>` prints its source); `tests/fx_render_test.m <folder with the .fx files>`
-renders the game's pixel shaders with known inputs and checks their results (glow taps and weights, shadow blur, heat
-shimmer, Dot3, ice, specular, water, sampler slots, XRGB alpha).
-
-Native hot loops (`runtime/win32/native.c`, entered through `tools/lift.py` HOOKS and OVERRIDES): the vertex lighting
-of directional lights and the terrain's 3x3 vertex transform, bit-identical to the original. `DS2_NATIVE=0` runs the
-recompiled original instead, `DS2_NATIVE_CHECK=1` runs both and reports any difference, `DS2_NATIVE_PROF=1` prints
-the lighting loop's time. `DSR_CAPLOG=1` prints the game's work per frame that the automatic frame cadence (120/60) is
-chosen from.
+This repository inherited other ports' scripts and runtime modules. Dungeon Siege II's function counts, shaders,
+Miles audio, DirectPlay 8 lobby and play-test results do not describe Rainbow Six. `build_df.sh` and
+[docs/DF-PORT.md](../docs/DF-PORT.md) concern Delta Force and Delta Force 2.
 
 ## Execution model
 
-- **Memory:** one 4 GB host region; guest address = offset. The image sits at its preferred base `0x400000`, so all
-  pointers the game stores (vtables, saves, its own structures) keep their 32-bit values.
+- **Memory:** one 4 GB host region; guest addresses are offsets. The game's pointers and structures retain their
+  32-bit layout.
 - **Functions:** one C function per original function. Registers are C locals, written back to a per-thread context
-  around calls. The guest stack is real (`call` pushes the original return address; arguments are read where the
-  original reads them), so calling conventions, `this` pointers and stack-walking code behave as before.
-- **Flags:** lazy — flag-setting instructions record their operands; consumers (`jcc`, `setcc`, `adc`, `sahf` …)
-  compute only the flags they need.
-- **x87:** eight doubles + TOP + control/status words, the precision model this game was measured to run with under
-  Rosetta: double arithmetic, float rounding at 32-bit stores, `fist(p)` honouring the rounding
-  mode. x87 register forms are decoded from the opcode bytes (Intel semantics), not from disassembler text.
-- **Indirect calls/jumps:** an address → function table; jump tables become `switch` statements; imports are dispatched
-  through `rt_import` (IAT slots hold thunk addresses, so a call through a register still lands there).
-- Junk decodes (data read as code) and padding become `rt_unhandled()` traps.
+  around calls. The guest stack preserves the original calling conventions and return addresses.
+- **Flags:** flag-setting instructions record their operands; consumers calculate the flags they need.
+- **x87:** eight doubles, TOP and control/status words, with rounding at float stores. `runtime/rt.c` uses
+  CORE-MATH for tan, sin, cos and atan2; other transcendentals use the host math library. The tag word is not modelled.
+- **Indirect calls and jumps:** an address-to-function table, translated jump tables, and import dispatch through
+  `rt_import`. Unsupported instructions and unresolved targets can stop execution with a diagnostic.
 
-## Verification and known gaps
+## Verification tools
 
-The instruction-level harness (`tests/harness.py`, `tests/fuzz_insn.py`, `tests/test_slice.py`) comes from the
-Dungeon Siege 1 port, where every instruction form the game used was checked bit-for-bit against Unicorn; it has not
-been re-run on DS2's instruction mix yet. DS2 has been checked by playing: menus, hero creation, movies, the opening
-of the campaign, save/load, and a 6-minute random-input soak.
+The inherited instruction harnesses (`tests/harness.py`, `tests/fuzz_insn.py`, `tests/fuzz_sse.py`) compare recompiled
+instructions with Unicorn. `tests/replay.py` compares a recorded call with the original x86 execution.
+`tests/metal_regressions.sh` and `tests/check_linux.sh` exercise runtime and renderer code without game files.
+Their presence does not establish complete Rainbow Six coverage; recorded game testing and its limits are in the
+root README and [port notes](../docs/R6-PORT.md).
 
-- **SEH:** access violations and RaiseException go through the game's handlers. First touches of reserved archive
-  pages pass over C++ `catch(...)` frames (the game reads archives inside them); C++ catch continuations are not
-  implemented, and the game has not needed them so far.
-- **Indirect calls** to addresses outside the function table stop the game with the address logged (add it as a
-  seed in `work/observed_targets.json` and rebuild).
-- **x87 tag word** is not modelled. Transcendentals: tan, sin, cos and atan2 are correctly rounded (CORE-MATH); the
-  others use the host math library.
+For development, `DS_TEST=1` uses a background window without mouse capture or the launcher; `DS_RESOLUTION=WxH`,
+`DS_SCRIPT` and `DS_CMDFILE` control scripted runs. `W32_TRACE=<file>`, `W32_SEHLOG=1`, `W32_REGLOG=1` and
+`W32_AUDIOLOG=1` provide diagnostics. These are runtime options, not installer flags.
