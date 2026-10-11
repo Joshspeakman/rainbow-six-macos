@@ -4,6 +4,7 @@
  *   OVERRIDES: at a function's first instruction; return 1 when the whole call (including the return) was done here,
  *              0 to run the original.
  * The DS1 port's hooks (draw distance, Skrit messages, shadows, paper doll, expansion) are the model for these. */
+#include <math.h>
 #include "w32.h"
 #include "edition.h"
 #include "ext.h"
@@ -27,6 +28,27 @@ static void mood_read(Ctx *c)
     if (G_MEM[bp - 0x184]) { sf(bp - 0x17c, gf(bp - 0x17c) * f); sf(bp - 0x178, gf(bp - 0x178) * f); }
     if (G_MEM[bp - 0x174]) for (uint32_t o = 0x170; o >= 0x164; o -= 4) sf(bp - o, gf(bp - o) * f);
 }
+
+#ifdef R6_EDITION
+/* Rainbow Six's mouse look (0x557ed0) turns by the cursor's distance from the window centre plus what the last frame
+ * held back, times min(frame time x 40, 1), rounded up (ceil); the rest is held for the next frame. At 40 fps or less
+ * that is every pixel. Faster, a small positive remainder still turns at least a pixel, but a small negative one
+ * rounds to 0 every frame and stays held back (up to 2 pixels at 120 fps): slow movements one way did nothing, and the
+ * held pixels then ate the start of the next movement back. At 0x557ff8 the two turns (ebx: across, eax: up and down,
+ * already inverted if Invert Mouse is on) are rounded away from zero both ways instead, as the positive side was.
+ * R6_MOUSE_ORIGINAL=1 keeps the game's rounding. */
+static int32_t away_from_zero(double v) { return v >= 0 ? (int32_t)ceil(v) : -(int32_t)ceil(-v); }
+static void r6_mouse_round(Ctx *c)
+{
+    static int orig = -1; if (orig < 0) orig = getenv("R6_MOUSE_ORIGINAL") != 0;
+    if (orig) return;
+    float f = gf(c->esp + 0x10);                                  /* min(frame time x 40, 1) */
+    int32_t dx = (int32_t)rt_r32(G_MEM, c->esp + 0x18), dy = (int32_t)rt_r32(G_MEM, c->esp + 0x14);
+    if (getenv("DS_HOOKLOG")) fprintf(stderr, "hook: mouse look %d,%d x %.3f: game %d,%d", dx, dy, f, (int32_t)c->ebx, (int32_t)c->eax);
+    c->ebx = (uint32_t)away_from_zero((double)dx * f); c->eax = (uint32_t)away_from_zero((double)dy * f);
+    if (getenv("DS_HOOKLOG")) fprintf(stderr, " -> %d,%d\n", (int32_t)c->ebx, (int32_t)c->eax);
+}
+#endif
 
 int vm_committed(uint32_t addr, uint32_t size);
 static int readable(uint32_t p) { return p >= 0x10000 && vm_committed(p, 1); }
@@ -57,6 +79,9 @@ void rt_hook(Ctx *c, uint32_t addr)
     if (native_hook(c, addr)) return;
     switch (addr) {
     case DS2_MOOD_READ: mood_read(c); break;
+#ifdef R6_EDITION
+    case 0x00557ff8u: r6_mouse_round(c); break;
+#endif
     default:   /* development trace hooks (tools/lift.py DS_TRACE_HOOKS) */
         {   /* W32_SNAP=<hook address>[:<call number>] W32_SNAP_FILE=<path>: one call's entry state for tests/replay.py */
             static long calls; const char *e = getenv("W32_SNAP");

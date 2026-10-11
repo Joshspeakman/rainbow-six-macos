@@ -37,6 +37,9 @@ OVERRIDES = {             # address: description (runtime/win32/hooks.c rt_overr
     0x007663b0: 'UIButton::DisableButton: the main menu keeps its Multiplayer button (GOG 2.3 disables it)',
 }
 
+# Rainbow Six's mouse look, 0x557f3d..0x558015 (GOG 1.04 and the co-op mod alike): the hook at 0x557ff8 needs exactly this code
+R6_MOUSE_LOOK_SHA = 'f705b7446572110b176fe06abd3720768a53b087d4b13a1180369a75d5b07700'
+
 RET_FORMS = ('repz ret', 'rep ret', 'bnd ret')
 
 class SlotInsn:
@@ -1052,6 +1055,11 @@ def main():
         edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2', 'r6') else identify(a.exe, prepared=True)
         if edition in ('fnv', 'sims', 'df1', 'df2', 'r6'):        # Fallout: New Vegas, The Sims, Delta Force, Rainbow Six: none of the DS2 hooks apply
             L.hooks = {}; L.overrides = {}
+        if edition == 'r6':   # GOG 1.04's mouse look (also in the co-op mod's executable): only where its code is as expected
+            import hashlib
+            if hashlib.sha256(L.code[0x557f3d - L.TLO:0x557f3d - L.TLO + 0xd8]).hexdigest() == R6_MOUSE_LOOK_SHA:
+                L.hooks = {0x557ff8: 'mouse look: the turn rounded away from zero both ways (hooks.c r6_mouse_round)'}
+            else: print('lift: Rainbow Six mouse look not at 0x557ff8 (a different executable): its rounding stays the game\'s')
         if edition == 'sims':
             L.overrides = {0x467020: 'crash reporting (crashpad): not started'}
         elif edition == 'broken-world':
