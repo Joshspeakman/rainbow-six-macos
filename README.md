@@ -25,15 +25,15 @@ git-ignored `recomp/work/` folder. The app reads the game's data from your folde
 
 ## Status
 
-This is beta software. The game plays from the intro through the menus into training and missions, and the game's own
-multiplayer works. Some areas have had little or no testing (see [Known issues](#known-issues)).
+This is beta software. The game plays from the intro through the menus into training and missions. The game's own
+multiplayer is **in alpha testing**. Some areas have had little or no testing (see [Known issues](#known-issues)).
 
 | Area | State |
 |---|---|
 | Intro movie (Smacker), menus, training, campaign screens | working |
 | Missions: the Direct3D (DirectX 5) world, HUD, movement, mouse look, firing, night vision | working |
 | Sound effects; music (the CD tracks, played from `MUSIC/TrackNN.ogg`) | working; Mac sound not compared with the original yet |
-| The game's own LAN / TCP-IP multiplayer | working on one co-op mission with 2 players (see [Known issues](#known-issues)) |
+| The game's own LAN / TCP-IP multiplayer | **In alpha testing**; one co-op mission tested with 2 players (see [Known issues](#known-issues)) |
 | Frame rate | follows your display (for example 120 fps on a ProMotion MacBook); the game's speed doesn't change with it |
 | Voice chat (Voxware) | off: its codecs aren't available, and the original has none under Wine either |
 
@@ -47,10 +47,9 @@ The project builds from whichever `RainbowSix.exe` is in your game folder.
 **The stock GOG 1.04 executable** is all you need for:
 
 - single player: training and the campaign (not yet played through from start to finish);
-- the game's own multiplayer over LAN or TCP/IP, with other players running this port. It speaks the original game's
-  protocol: on Linux it played the first co-op mission with the unmodified Windows game (running under Wine), with
-  either side hosting. Windows players on stock 1.04 should be able to join in the same way, but that hasn't been
-  tested against a real Windows PC.
+- the game's own multiplayer over LAN or TCP/IP, which is **in alpha testing**. The Linux port played the first
+  co-op mission with the unmodified stock GOG 1.04 game running under Wine, with either side hosting.
+  Compatibility with the game running on a native Windows PC is unverified.
 
 The build recognises the stock file by its SHA-256 (`recomp/r6_stock.sha256`, `556ed69b7029d58852458afe1a11ce3aa95a3cf16d2bca43e5f322c6c8aec8a4`) and prints
 `RainbowSix.exe: stock GOG 1.04`. Any other `RainbowSix.exe` is still built, with the note `not the stock GOG 1.04
@@ -193,6 +192,8 @@ The game's own controls apply, set in its Options screen (or in the mod's launch
 
 ### Multiplayer
 
+**In alpha testing.** See [Known issues](#known-issues) for the limits of testing so far.
+
 Use the game's **Multiplayer** screen, as on Windows, with TCP/IP. The host listens on the game's TCP port **2346**.
 The first time, macOS asks whether Rainbow Six may find devices on your local network: allow it, or other players
 can't find or join you. Joining by IP address works. Between machines on one network, the server list should show
@@ -234,7 +235,7 @@ Your game folder isn't changed by the port; delete it separately if you want.
   same under Wine. The port hides these frames by showing the previous picture for at most 45 ms. It catches most of
   them, not all; a frame or two per walk through a building can still get through. `R6_HOLD_BLANK=0` turns the hold
   off.
-- **Little multiplayer testing.** Co-op has been played on the first mission (Operation Steel Wind) with two players,
+- **Multiplayer is in alpha testing.** Co-op has been played on the first mission (Operation Steel Wind) with two players,
   plus training. Adversarial games, more than two players and the full campaign in co-op are untested. So is internet
   play between different networks.
 - **Server list.** The server list between this port and the original game on the same machine is untested; joining
