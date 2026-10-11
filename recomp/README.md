@@ -73,3 +73,19 @@ root README and [port notes](../docs/R6-PORT.md).
 For development, `DS_TEST=1` uses a background window without mouse capture or the launcher; `DS_RESOLUTION=WxH`,
 `DS_SCRIPT` and `DS_CMDFILE` control scripted runs. `W32_TRACE=<file>`, `W32_SEHLOG=1`, `W32_REGLOG=1` and
 `W32_AUDIOLOG=1` provide diagnostics. These are runtime options, not installer flags.
+
+## A note from the author
+
+These projects are roughly 90% built with AI, with human testing along the way. I started them because some of my
+favorite games either ran badly on macOS or wouldn’t run at all, and Wine and CrossOver didn’t always get me where I
+wanted.
+
+I’m a 40-year-old dad with a full-time job. I don’t have the time or desire to write all of this from scratch, and AI
+made it possible to get somewhere with it.
+
+If that puts you off, no hard feelings. Use them, skip them, fork them. It’s all good. I would have happily used an
+existing, human-written native port, but I couldn’t find one that did what I wanted. Mostly, I just want to play my
+games.
+
+The aim is straightforward native builds without unwanted extras or a stack of translation layers. Forks and
+improvements are welcome.
