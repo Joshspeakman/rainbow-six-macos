@@ -1,16 +1,23 @@
-# Recompiler: Delta Force and Delta Force 2 as native code
+# Recompiler: Rainbow Six as native code
 
-Static recompilation of the user's own Steam `Df.exe` / `Df2.exe` (and the NovaLogic DLLs in the game folder) into C,
-compiled for Apple Silicon or Linux x86-64. Nothing derived from the games is committed: `build_df.sh` regenerates
-everything locally from the user's files. Installing and playing: [README](../README.md); what was specific to these
-games and the Mac handoff: [docs/DF-PORT.md](../docs/DF-PORT.md).
+Static recompilation of the user's own `RainbowSix.exe` (GOG 1.04, or that file with a mod patched in) and the
+`SMACKW32.DLL` from the game folder into C, compiled for Apple Silicon or Linux x86-64. Nothing derived from the game is
+committed: `build_r6.sh` regenerates everything locally from the user's files. Installing and playing:
+[README](../README.md); what was specific to this game (Direct3D 2 from DirectX 5, colour-keyed blits, C++ exceptions,
+door portals, CD audio, patched executables with extra code sections): [docs/R6-PORT.md](../docs/R6-PORT.md).
 
 ```sh
-recomp/build_df.sh "/path/to/Delta Force 2"      # -> recomp/work/df2 (a minute or two)
+recomp/build_r6.sh "/path/to/Rainbow Six"        # -> recomp/work/r6 (several minutes; R6_BUILD_JOBS=<n>, default 16)
+R6_RELINK=1 recomp/build_r6.sh "/path/to/Rainbow Six"   # runtime or host changes only
 ```
 
-The sections below describe the recompiler as inherited from the Dungeon Siege II port (its execution model, flags,
-x87, indirect calls and test harnesses apply unchanged); the numbers in them are Dungeon Siege II's.
+The repository started as the Delta Force port, and `build_df.sh` and [docs/DF-PORT.md](../docs/DF-PORT.md) still
+build and describe Delta Force and Delta Force 2 from their Steam copies. The sections below describe the recompiler
+as inherited from the Dungeon Siege II port (its execution model, flags, x87, indirect calls and test harnesses apply
+unchanged); the numbers, file names and options in them are Dungeon Siege II's, and some (Direct3D 9, Miles, DirectPlay)
+do not apply to Rainbow Six. Two things have changed since: x87 `fsin`/`fcos`/`fptan`/`fpatan` now use correctly
+rounded CORE-MATH routines (`third_party/core-math`), so they give the same bits on every host, and the analysis
+accepts executables with more than one code section.
 
 ## Status
 
@@ -22,7 +29,7 @@ x87, indirect calls and test harnesses apply unchanged); the numbers in them are
 | Direct3D 9 (`d3d9.c`, `d3d9_fmt.c`) on the Metal renderer (`../src/renderer`), D3DX textures (`d3dx9.c`) | working: fixed function, and the game's HLSL effects compiled to Metal (`hlsl.c`, `d3dx9_fx.c`) |
 | Miles 6.6g (`mss32.dll` and its providers) and Bink, recompiled from the game folder; DirectSound over Core Audio | working |
 | App bundle, installer (`../install.sh`), launch window (`host/launcher.m`; Rainbow Six: `host/r6_launcher.m`, from the co-op mod's r6coop-launcher.json) | working |
-| Multiplayer (DirectPlay 8, GameSpy lobby on OpenSpy) | switched back on: the lobby works with an original CD key; hosting and joining untested (`../docs/MULTIPLAYER.md`) |
+| Multiplayer (DirectPlay 8, GameSpy lobby on OpenSpy) | switched back on: the lobby works with an original CD key; hosting and joining untested (Dungeon Siege II's notes, not in this repository) |
 
 The recompiled game runs without Wine or Rosetta: intro, menus, new hero, the campaign, saving and loading.
 
@@ -80,4 +87,5 @@ of the campaign, save/load, and a 6-minute random-input soak.
   implemented, and the game has not needed them so far.
 - **Indirect calls** to addresses outside the function table stop the game with the address logged (add it as a
   seed in `work/observed_targets.json` and rebuild).
-- **x87 tag word** is not modelled; transcendentals use the host math library.
+- **x87 tag word** is not modelled. Transcendentals: tan, sin, cos and atan2 are correctly rounded (CORE-MATH); the
+  others use the host math library.
