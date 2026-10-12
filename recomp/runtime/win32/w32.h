@@ -31,6 +31,7 @@ extern uint32_t w32_image_base, w32_image_size, w32_entry, w32_tls_index_addr, w
 extern char     w32_game_dir[1024];                /* host path of the game folder ("C:\GOG Games\Dungeon Siege") */
 extern int      w32_deterministic;                 /* harness: time and ids are deterministic */
 int      w32_load(const char *exe_path);           /* map image, fill IAT, PEB, process heap; 0 on success */
+void w32_free_thread_teb(uint32_t teb);
 uint32_t w32_new_thread_teb(uint32_t stack_lo, uint32_t stack_hi);   /* TEB guest address */
 uint32_t w32_thunk_for(const char *dll, const char *name);           /* dynamic import (GetProcAddress) */
 uint32_t w32_thunk_register(const char *name, void (*fn)(Ctx *));   /* internal entry point (COM methods) */

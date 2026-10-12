@@ -1,6 +1,7 @@
 /* KERNEL32 core: version, modules, environment, TLS, heaps, virtual memory, critical sections, interlocked, time,
  * synchronisation objects, handles, process control. */
 #include "w32.h"
+#include "thread_state.h"
 
 #include <unistd.h>
 #include <time.h>
@@ -14,8 +15,10 @@ extern uint32_t w32_cmdline_a, w32_cmdline_w, w32_modname_a, w32_env_a, w32_env_
 static HObj htab[MAXH]; static pthread_mutex_t hlock = PTHREAD_MUTEX_INITIALIZER;
 uint32_t h_new(int type, void *p)
 {
+    if (type == H_THREAD && !p) return 0;
     pthread_mutex_lock(&hlock);
     for (int k = 1; k < MAXH; k++) if (htab[k].type == H_FREE) {
+        if (type == H_THREAD) w32_thread_retain(p);
         htab[k].type = type; htab[k].refs = 1; htab[k].p = p; pthread_mutex_unlock(&hlock); return 0x100 + 4 * (uint32_t)k;
     }
     pthread_mutex_unlock(&hlock); return 0;
@@ -29,8 +32,8 @@ HObj *h_get(uint32_t h, int type)
 void w32_handle_closed(HObj *o);   /* files.c / sync below */
 int h_close(uint32_t h)
 {
-    HObj *o = h_get(h, 0); if (!o) return 0;
     pthread_mutex_lock(&hlock);
+    HObj *o = h_get(h, 0); if (!o) { pthread_mutex_unlock(&hlock); return 0; }
     if (--o->refs == 0) { w32_handle_closed(o); o->type = H_FREE; o->p = 0; }
     pthread_mutex_unlock(&hlock); return 1;
 }
@@ -347,7 +350,6 @@ IMPL(kernel32, Sleep)
 }
 
 /* ---- synchronisation objects ---- */
-typedef struct Sync { pthread_mutex_t m; pthread_cond_t cv; int manual, signaled, count; uint32_t owner; char name[64]; int waiters, closed; } Sync;   /* same in core.c and threads.c */
 static Sync *sync_new(int manual, int signaled)
 {
     Sync *s = calloc(1, sizeof *s); pthread_mutex_init(&s->m, 0); pthread_cond_init(&s->cv, 0);
@@ -428,9 +430,13 @@ IMPL(kernel32, ReleaseMutex)
 /* 0 = acquired, 0x102 = timeout. Thread handles are signalled when the thread ends (threads.c). */
 int w32_wait_one(Ctx *c, uint32_t h, uint32_t ms)
 {
-    HObj *o = h_get(h, 0); if (!o) return -1;
-    if (o->type != H_EVENT && o->type != H_MUTEX && o->type != H_THREAD && o->type != H_SEMAPHORE) return -1;
+    pthread_mutex_lock(&hlock);
+    HObj *o = h_get(h, 0); if (!o) { pthread_mutex_unlock(&hlock); return -1; }
+    if (o->type != H_EVENT && o->type != H_MUTEX && o->type != H_THREAD && o->type != H_SEMAPHORE) { pthread_mutex_unlock(&hlock); return -1; }
     Sync *s = o->p; uint32_t tid = w32_tid(c); int type = o->type;   /* o may be closed (and its slot reused) while we wait */
+    void *thread_ref = o->type == H_THREAD ? o->p : NULL;
+    if (thread_ref) w32_thread_retain(thread_ref);
+    pthread_mutex_unlock(&hlock);
     struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl);
     dl.tv_sec += ms / 1000; dl.tv_nsec += (long)(ms % 1000) * 1000000; if (dl.tv_nsec >= 1000000000) { dl.tv_sec++; dl.tv_nsec -= 1000000000; }
     void w32_crash_wait_begin(int, uint32_t, uint32_t), w32_crash_wait_end(void);
@@ -449,6 +455,7 @@ int w32_wait_one(Ctx *c, uint32_t h, uint32_t ms)
     pthread_mutex_unlock(&s->m);
     if (last) { pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->cv); free(s); }
     if (ms) w32_crash_wait_end();
+    if (thread_ref) w32_thread_release(thread_ref);
     return r;
 }
 IMPL(kernel32, WaitForSingleObject)
@@ -471,7 +478,8 @@ IMPL(kernel32, CloseHandle) { RET(h_close(ARG(0)) || ARG(0) == 0xffffffffu || AR
 __attribute__((weak)) void w32_file_closed(HObj *o) { (void)o; }
 void w32_handle_closed(HObj *o)
 {
-    if (o->type == H_THREAD || o->type == H_PROCESS) return;       /* thread objects live as long as the process */
+    if (o->type == H_THREAD) { w32_thread_release(o->p); return; }
+    if (o->type == H_PROCESS) return;
     if (o->type == H_EVENT || o->type == H_MUTEX || o->type == H_SEMAPHORE) {
         Sync *s = o->p; for (int k = 0; k < nnamed; k++) if (named[k] == s) { named[k] = named[--nnamed]; named_h[k] = named_h[nnamed]; }
         /* Windows keeps an object alive while threads wait on it (they go on waiting); destroying a condition variable
@@ -585,18 +593,55 @@ IMPL(kernel32, GetConsoleTitleA) { RET(0, 2); }
 IMPL(kernel32, SetConsoleTitleA) { RET(1, 1); }
 
 /* ---- thread objects: one per guest thread (TEB), signalled when the thread ends ---- */
-typedef struct ThreadObj { Sync s; uint32_t teb, tid, exit_code, suspended; pthread_t pt; } ThreadObj;
 static ThreadObj *thread_objs[MAX_THREADS];
+static pthread_mutex_t thread_lock = PTHREAD_MUTEX_INITIALIZER;
 ThreadObj *w32_thread_obj(uint32_t teb)
 {
     uint32_t k = (teb - TEB_BASE) / 0x2000;
-    if (k >= MAX_THREADS) return 0;
+    if (teb < TEB_BASE || k >= MAX_THREADS) return 0;
+    pthread_mutex_lock(&thread_lock);
     if (!thread_objs[k]) {
-        ThreadObj *t = calloc(1, sizeof *t); pthread_mutex_init(&t->s.m, 0); pthread_cond_init(&t->s.cv, 0);
-        t->s.manual = 1; t->teb = teb; t->tid = rt_r32(G_MEM, teb + 0x24); t->exit_code = 0x103;   /* STILL_ACTIVE */
-        thread_objs[k] = t;
+        ThreadObj *t = calloc(1, sizeof *t);
+        if (t) {
+            pthread_mutex_init(&t->s.m, 0); pthread_cond_init(&t->s.cv, 0);
+            t->s.manual = 1; t->teb = teb; t->tid = rt_r32(G_MEM, teb + 0x24);
+            t->exit_code = 0x103; t->refs = 1; /* running thread owns the initial reference */
+            thread_objs[k] = t;
+        }
     }
-    return thread_objs[k];
+    ThreadObj *t = thread_objs[k];
+    pthread_mutex_unlock(&thread_lock);
+    return t;
+}
+void w32_thread_retain(void *p)
+{
+    ThreadObj *t = p; __atomic_add_fetch(&t->refs, 1, __ATOMIC_RELAXED);
+}
+void w32_thread_release(void *p)
+{
+    ThreadObj *t = p;
+    if (__atomic_sub_fetch(&t->refs, 1, __ATOMIC_ACQ_REL) == 0) {
+        pthread_mutex_destroy(&t->s.m); pthread_cond_destroy(&t->s.cv); free(t);
+    }
+}
+__attribute__((weak)) void w32_thread_queue_closed(uint32_t tid) { (void)tid; }
+void w32_thread_finish(uint32_t teb, uint32_t code)
+{
+    uint32_t k = (teb - TEB_BASE) / 0x2000;
+    if (teb < TEB_BASE || k >= MAX_THREADS) return;
+    pthread_mutex_lock(&thread_lock);
+    ThreadObj *t = thread_objs[k]; thread_objs[k] = 0;
+    pthread_mutex_unlock(&thread_lock);
+    w32_thread_queue_closed(rt_r32(G_MEM, teb + 0x24));
+    w32_free_thread_teb(teb);
+    /* Old handles retain their own object when this TEB is reused. Publish
+     * completion only after all guest resources have been returned. */
+    if (t) {
+        pthread_mutex_lock(&t->s.m);
+        t->exit_code = code; t->s.signaled = 1; pthread_cond_broadcast(&t->s.cv);
+        pthread_mutex_unlock(&t->s.m);
+        w32_thread_release(t);
+    }
 }
 IMPL(kernel32, DuplicateHandle)
 {
