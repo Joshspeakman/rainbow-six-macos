@@ -58,34 +58,63 @@ void *vk_arena(VkArena *a, size_t n)
 }
 void vk_arena_free(VkArena *a) { for (unsigned k = 0; k < a->n; k++) free(a->blocks[k]); free(a->blocks); a->blocks = 0; a->n = a->cap = 0; }
 
-/* ---- dispatchable handles: guest ids are 16-byte guest allocations, so they are unique and never 0 ---- */
+/* ---- dispatchable handles and the device/pool that owns each child ---- */
 #define NH 8192
-static struct { uint32_t g; const void *h; } htab[NH]; static pthread_mutex_t h_m = PTHREAD_MUTEX_INITIALIZER;
-uint32_t vkh_guest(const void *host)
+static struct { uint32_t g; const void *h; VkDevice device; VkCommandPool pool; } htab[NH];
+static pthread_mutex_t h_m = PTHREAD_MUTEX_INITIALIZER;
+/* A small direct-mapped index keeps repeated command-buffer/device lookups off
+ * the linear scan. Entries are checked under h_m against the live handle table,
+ * so collisions, destruction and guest-address reuse retain the slow fallback. */
+static uint16_t hcache[NH];
+static unsigned handle_bucket(uint32_t guest) { return ((guest>>4)^(guest>>17))&(NH-1); }
+
+static uint32_t vkh_guest_owned(const void *host, VkDevice device, VkCommandPool pool)
 {
     if (!host) return 0;
     pthread_mutex_lock(&h_m);
-    for (int k = 0; k < NH; k++) if (htab[k].h == host) { uint32_t g = htab[k].g; pthread_mutex_unlock(&h_m); return g; }
-    uint32_t g = heap_alloc(w32_process_heap, 8, 16);
-    for (int k = 0; k < NH; k++) if (!htab[k].h) { htab[k].g = g; htab[k].h = host; break; }
+    int slot = -1;
+    for (int k = 0; k < NH; k++) {
+        if (htab[k].h == host) { uint32_t g = htab[k].g; pthread_mutex_unlock(&h_m); return g; }
+        if (!htab[k].h && slot < 0) slot = k;
+    }
+    uint32_t g = slot < 0 ? 0 : heap_alloc(w32_process_heap, 8, 16);
+    if (g) { htab[slot].g = g; htab[slot].h = host; htab[slot].device = device; htab[slot].pool = pool; }
     pthread_mutex_unlock(&h_m);
     return g;
 }
+uint32_t vkh_guest(const void *host) { return vkh_guest_owned(host, 0, 0); }
 void *vkh_host(uint32_t guest)
 {
     if (!guest) return 0;
-    uint32_t k = (guest >> 4) % NH;                    /* fast path: look where the id hashes first */
-    if (htab[k].g == guest) return (void *)htab[k].h;
     pthread_mutex_lock(&h_m);
-    for (int j = 0; j < NH; j++) if (htab[j].g == guest) { void *h = (void *)htab[j].h; pthread_mutex_unlock(&h_m); return h; }
+    unsigned bucket=handle_bucket(guest), cached=hcache[bucket];
+    if (cached && htab[cached-1].g==guest) {
+        void *h=(void *)htab[cached-1].h; pthread_mutex_unlock(&h_m); return h;
+    }
+    for (int j = 0; j < NH; j++) if (htab[j].g == guest) {
+        hcache[bucket]=(uint16_t)(j+1);
+        void *h = (void *)htab[j].h; pthread_mutex_unlock(&h_m); return h;
+    }
     pthread_mutex_unlock(&h_m);
     fprintf(stderr, "vulkan: unknown handle %08x\n", guest);
     return 0;
 }
+static void vkh_clear(int k)
+{
+    heap_free(w32_process_heap, htab[k].g); memset(&htab[k], 0, sizeof htab[k]);
+}
 void vkh_forget(const void *host)
 {
+    if (!host) return;
     pthread_mutex_lock(&h_m);
-    for (int k = 0; k < NH; k++) if (htab[k].h == host) { heap_free(w32_process_heap, htab[k].g); htab[k].h = 0; htab[k].g = 0; }
+    for (int k = 0; k < NH; k++) if (htab[k].h == host) vkh_clear(k);
+    pthread_mutex_unlock(&h_m);
+}
+static void vkh_forget_children(VkDevice device, VkCommandPool pool)
+{
+    pthread_mutex_lock(&h_m);
+    for (int k = 0; k < NH; k++)
+        if (htab[k].h && htab[k].device == device && (!pool || htab[k].pool == pool)) vkh_clear(k);
     pthread_mutex_unlock(&h_m);
 }
 void vk_unknown_stype(uint32_t stype)
@@ -257,20 +286,40 @@ IMPL(vulkan_1, vkCreateDevice)                                          /* (pd, 
     }
     RET(r, 4);
 }
-IMPL(vulkan_1, vkDestroyDevice) { VkDevice d = vkh_host(ARG(0)); if (d) { vkp.vkDestroyDevice(d, 0); vkh_forget(d); } RET(0, 2); }
+IMPL(vulkan_1, vkDestroyDevice) { VkDevice d = vkh_host(ARG(0)); if (d) { vkp.vkDestroyDevice(d, 0); vkh_forget_children(d, 0); vkh_forget(d); } RET(0, 2); }
 IMPL(vulkan_1, vkGetDeviceQueue)                                        /* (device, family, index, VkQueue *) */
 {
     VkQueue q = 0; vkp.vkGetDeviceQueue(vkh_host(ARG(0)), ARG(1), ARG(2), &q);
     if (!present_family) present_family = ARG(1) + 1;
-    rt_w32(G_MEM, ARG(3), vkh_guest(q)); RET(0, 4);
+    rt_w32(G_MEM, ARG(3), vkh_guest_owned(q, vkh_host(ARG(0)), 0)); RET(0, 4);
 }
 IMPL(vulkan_1, vkAllocateCommandBuffers)                                /* (device, info, VkCommandBuffer *) */
 {
+    VkDevice device = vkh_host(ARG(0));
     VkArena a = {0}; VkCommandBufferAllocateInfo ai; cin_VkCommandBufferAllocateInfo(&a, ARG(1), &ai);
-    VkCommandBuffer *cb = calloc(ai.commandBufferCount + 1, sizeof *cb);
-    VkResult r = vkp.vkAllocateCommandBuffers(vkh_host(ARG(0)), &ai, cb);
-    if (r == VK_SUCCESS) for (uint32_t k = 0; k < ai.commandBufferCount; k++) rt_w32(G_MEM, ARG(2) + 4 * k, vkh_guest(cb[k]));
+    VkCommandBuffer *cb = calloc((size_t)ai.commandBufferCount + 1, sizeof *cb);
+    VkResult r = cb ? vkp.vkAllocateCommandBuffers(device, &ai, cb) : VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (r == VK_SUCCESS) {
+        for (uint32_t k = 0; k < ai.commandBufferCount; k++) {
+            uint32_t g = vkh_guest_owned(cb[k], device, ai.commandPool);
+            if (!g) { r = VK_ERROR_OUT_OF_HOST_MEMORY; break; }
+            rt_w32(G_MEM, ARG(2) + 4 * k, g);
+        }
+        if (r != VK_SUCCESS) {
+            for (uint32_t k = 0; k < ai.commandBufferCount; k++) vkh_forget(cb[k]);
+            vkp.vkFreeCommandBuffers(device, ai.commandPool, ai.commandBufferCount, cb);
+        }
+    }
+    if (r != VK_SUCCESS) for (uint32_t k = 0; k < ai.commandBufferCount; k++) rt_w32(G_MEM, ARG(2) + 4 * k, 0);
     free(cb); vk_arena_free(&a); VK_TRACE("vkAllocateCommandBuffers", r); RET(r, 3);
+}
+IMPL(vulkan_1, vkDestroyCommandPool)
+{
+    VkDevice device = vkh_host(ARG(0));
+    VkCommandPool pool = (VkCommandPool)((uint64_t)ARG(1) | (uint64_t)ARG(2) << 32);
+    vkp.vkDestroyCommandPool(device, pool, 0);
+    if (pool) vkh_forget_children(device, pool);
+    RET(0, 4);
 }
 IMPL(vulkan_1, vkFreeCommandBuffers)                                    /* (device, pool (2), count, const VkCommandBuffer *) */
 {

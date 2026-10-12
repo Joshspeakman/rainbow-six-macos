@@ -27,7 +27,7 @@ static int ci_lookup(const char *dir, const char *name, char *out, size_t cap)
 char w32_game_overlay[1024];          /* writes to the game folder land here ("" = write in place) */
 int w32_import_from_ds1;               /* see w32_host_path */
 int w32_loa_docs;                      /* the expansion is played: Documents\\Dungeon Siege is Documents\\Dungeon Siege LOA
-                                        * (separate from w32_game_layer, which w32_host_dirs switches off pass by pass) */
+                                        * (independent of the layer selected during directory enumeration) */
 char w32_game_layer[1024];            /* read-only layer between the overlay and the game folder: the expansion's data
                                        * (Resources/, Maps/) when Legends of Aranna is played; "" = none */
 static int exists(const char *p) { struct stat st; return !stat(p, &st); }
@@ -55,7 +55,7 @@ static void resolve(const char *root, char **parts, int from, int np, char *out,
     snprintf(out, cap, "%s", cur);
 }
 /* Windows path -> host path. mode 0: read (overlay if present, else base); 1: create/write (overlay, copied up). */
-int w32_host_path(const char *win, char *out, size_t cap, int mode)
+static int host_path(const char *win, char *out, size_t cap, int mode, const char *overlay, const char *layer)
 {
     char full[2048], norm[2048];
     if (((win[0] | 32) >= 'a' && (win[0] | 32) <= 'z') && win[1] == ':') snprintf(full, sizeof full, "%s", win);
@@ -84,42 +84,40 @@ int w32_host_path(const char *win, char *out, size_t cap, int mode)
         if (mode) mkdirs(out);
         return 0;
     }
-    char base[2048]; resolve(w32_game_dir, parts, 2, np, base, sizeof base);
-    if (!*w32_game_overlay) { snprintf(out, cap, "%s", base); return 0; }
-    char ov[2048]; resolve(w32_game_overlay, parts, 2, np, ov, sizeof ov);
+    char base[2048] = {0};
+    if (!*overlay) { resolve(w32_game_dir, parts, 2, np, out, cap); return 0; }
+    char ov[2048]; resolve(overlay, parts, 2, np, ov, sizeof ov);
     if (exists(ov)) { snprintf(out, cap, "%s", ov); return 0; }
-    if (*w32_game_layer) {                       /* the expansion layer: read where it has the file */
-        char ly[2048]; resolve(w32_game_layer, parts, 2, np, ly, sizeof ly);
+    if (*layer) {                       /* the expansion layer: read where it has the file */
+        char ly[2048]; resolve(layer, parts, 2, np, ly, sizeof ly);
         struct stat lst;
         if (!stat(ly, &lst) && (!mode || S_ISDIR(lst.st_mode))) { if (!mode) { snprintf(out, cap, "%s", ly); return 0; } }
         else if (!stat(ly, &lst) && mode) { snprintf(base, sizeof base, "%s", ly); }   /* written: copied up from the layer */
     }
+    if (!*base) resolve(w32_game_dir, parts, 2, np, base, sizeof base);
     if (!mode) { snprintf(out, cap, "%s", base); return 0; }
     struct stat st;
     if (!stat(base, &st) && S_ISREG(st.st_mode)) copy_file(base, ov); else mkdirs(ov);
     snprintf(out, cap, "%s", ov);
     return 0;
 }
+int w32_host_path(const char *win, char *out, size_t cap, int mode)
+{
+    return host_path(win, out, cap, mode, w32_game_overlay, w32_game_layer);
+}
 /* every host directory behind a game-folder directory (overlay, expansion layer, game folder); returns how many exist */
 int w32_host_dirs(const char *win, char dirs[3][2048])
 {
-    char save_ov[1024], save_ly[1024]; int n = 0;
-    snprintf(save_ov, sizeof save_ov, "%s", w32_game_overlay); snprintf(save_ly, sizeof save_ly, "%s", w32_game_layer);
-    /* one pass per layer: overlay only, layer only, game folder only (the others switched off) */
+    const char *layers[] = { w32_game_overlay, w32_game_layer, "" };
+    int n = 0;
     for (int pass = 0; pass < 3; pass++) {
-        if (pass == 0 && !*save_ov) continue;
-        if (pass == 1 && !*save_ly) continue;
-        if (pass == 0) { w32_game_layer[0] = 0; }
-        if (pass == 1) { snprintf(w32_game_overlay, sizeof w32_game_overlay, "%s", save_ly); w32_game_layer[0] = 0; }
-        if (pass == 2) { w32_game_overlay[0] = 0; w32_game_layer[0] = 0; }
+        if (pass < 2 && !*layers[pass]) continue;
         char d[2048];
-        if (!w32_host_path(win, d, sizeof d, 0) && exists(d)) {
+        if (!host_path(win, d, sizeof d, 0, layers[pass], "") && exists(d)) {
             int dup = 0; for (int j = 0; j < n; j++) if (!strcmp(dirs[j], d)) dup = 1;
             if (!dup) snprintf(dirs[n++], 2048, "%s", d);
         }
-        snprintf(w32_game_overlay, sizeof w32_game_overlay, "%s", save_ov); snprintf(w32_game_layer, sizeof w32_game_layer, "%s", save_ly);
     }
-    if (!*save_ov && !n) { if (!w32_host_path(win, dirs[0], 2048, 0) && exists(dirs[0])) n = 1; }
     return n;
 }
 

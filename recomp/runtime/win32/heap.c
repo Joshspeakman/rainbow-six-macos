@@ -48,10 +48,15 @@ static void set_block(uint32_t b, uint32_t size, uint32_t inuse, uint32_t prev, 
 
 static uint32_t add_segment(Heap *h, uint32_t need)
 {
-    uint32_t sz = need + 2 * HDR > SEG_MIN ? (need + 2 * HDR + 0xffff) & ~0xffffu : SEG_MIN;
+    uint32_t sz = need + 3 * HDR > SEG_MIN ? (need + 3 * HDR + 0xffff) & ~0xffffu : SEG_MIN;
     uint32_t base = vm_alloc(0, sz, 0x3000, 4);
     if (!base) return 0;
-    if (h->nsegs == h->capsegs) { h->capsegs = h->capsegs ? h->capsegs * 2 : 8; h->segs = realloc(h->segs, h->capsegs * sizeof *h->segs); }
+    if (h->nsegs == h->capsegs) {
+        int cap = h->capsegs ? h->capsegs * 2 : 8;
+        uint32_t *segs = realloc(h->segs, cap * sizeof *segs);
+        if (!segs) { vm_free(base, 0, 0x8000); return 0; }
+        h->segs = segs; h->capsegs = cap;
+    }
     h->segs[h->nsegs++] = base;
     /* [16-byte segment header][free block ...][end sentinel: size 0, in use] */
     uint32_t b = base + HDR, n = sz - 2 * HDR - HDR;
@@ -69,14 +74,23 @@ uint32_t heap_create(uint32_t initial, uint32_t max)
 {
     (void)initial; (void)max;
     Heap *h = calloc(1, sizeof *h);
+    if (!h) return 0;
     pthread_mutexattr_t a; pthread_mutexattr_init(&a); pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(&h->lock, &a);
+    pthread_mutex_init(&h->lock, &a); pthread_mutexattr_destroy(&a);
     h->handle = 1;                                  /* placeholder until the first segment exists */
     uint32_t b = add_segment(h, 0);
-    if (!b) { free(h); return 0; }
+    if (!b) { pthread_mutex_destroy(&h->lock); free(h->segs); free(h); return 0; }
     h->handle = h->segs[0];
     W32x(b + 12, h->handle); W32x(b + SZ(b) + 12, h->handle);
-    pthread_mutex_lock(&heaps_lock); heaps[nheaps++] = h; pthread_mutex_unlock(&heaps_lock);
+    pthread_mutex_lock(&heaps_lock);
+    int slot = 0; while (slot < nheaps && heaps[slot]) slot++;
+    if (slot == 256) {
+        pthread_mutex_unlock(&heaps_lock);
+        for (int k = 0; k < h->nsegs; k++) vm_free(h->segs[k], 0, 0x8000);
+        pthread_mutex_destroy(&h->lock); free(h->segs); free(h); return 0;
+    }
+    heaps[slot] = h; if (slot == nheaps) nheaps++;
+    pthread_mutex_unlock(&heaps_lock);
     return h->handle;
 }
 int heap_destroy(uint32_t handle)
@@ -87,11 +101,12 @@ int heap_destroy(uint32_t handle)
     pthread_mutex_lock(&heaps_lock);
     for (int k = 0; k < nheaps; k++) if (heaps[k] == h) heaps[k] = 0;
     pthread_mutex_unlock(&heaps_lock);
-    free(h->segs); free(h); return 1;
+    pthread_mutex_destroy(&h->lock); free(h->segs); free(h); return 1;
 }
 static uint32_t take(Heap *h, uint32_t b, uint32_t need, uint32_t req)
 {
     uint32_t sz = SZ(b), prev = R32x(b + 4);
+    if (sz < need) return 0;
     unlink_free(h, b);
     if (sz - need >= MINBLK) {                       /* split: the rest stays free */
         uint32_t r = b + need, rs = sz - need, nx = b + sz;
@@ -146,7 +161,7 @@ uint32_t heap_size(uint32_t handle, uint32_t p)
 uint32_t heap_realloc(uint32_t handle, uint32_t flags, uint32_t p, uint32_t size)
 {
     Heap *h = H(handle);
-    if (!h || !valid(h, p)) return 0;
+    if (!h || size > 0x7ff00000u || !valid(h, p)) return 0;
     pthread_mutex_lock(&h->lock);
     uint32_t b = p - HDR, sz = SZ(b), old = R32x(b + 8), need = (size + HDR + 15) & ~15u, r = 0;
     if (need < MINBLK) need = MINBLK;

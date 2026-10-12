@@ -147,12 +147,17 @@ uint32_t w32_callback(Ctx *c, uint32_t fn, int nargs, const uint32_t *args)
 }
 
 /* ---- threads: TEB with static TLS ---- */
-static uint32_t nteb; static pthread_mutex_t teb_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t next_tid = 0x100, teb_tls[MAX_THREADS];
+static unsigned char teb_used[MAX_THREADS]; static pthread_mutex_t teb_lock = PTHREAD_MUTEX_INITIALIZER;
 uint32_t w32_tid(Ctx *c) { return rt_r32(G_MEM, c->fs_base + 0x24); }
 void w32_set_last_error(Ctx *c, uint32_t e) { rt_w32(G_MEM, c->fs_base + 0x34, e); }
 uint32_t w32_new_thread_teb(uint32_t stack_lo, uint32_t stack_hi)
 {
-    pthread_mutex_lock(&teb_lock); uint32_t k = nteb < MAX_THREADS ? nteb++ : MAX_THREADS; pthread_mutex_unlock(&teb_lock);
+    pthread_mutex_lock(&teb_lock);
+    uint32_t k = 0; while (k < MAX_THREADS && teb_used[k]) k++;
+    uint32_t tid = next_tid;
+    if (k < MAX_THREADS) { teb_used[k] = 1; next_tid += 4; }
+    pthread_mutex_unlock(&teb_lock);
     if (k >= MAX_THREADS) return 0;
     uint32_t teb = TEB_BASE + k * 0x2000, tlsarr = teb + 0x1000;
     memset(G_MEM + teb, 0, 0x2000);
@@ -160,15 +165,30 @@ uint32_t w32_new_thread_teb(uint32_t stack_lo, uint32_t stack_hi)
     rt_w32(G_MEM, teb + 0x04, stack_hi); rt_w32(G_MEM, teb + 0x08, stack_lo);
     rt_w32(G_MEM, teb + 0x18, teb);
     rt_w32(G_MEM, teb + 0x20, 0x40);                 /* process id */
-    rt_w32(G_MEM, teb + 0x24, 0x100 + 4 * k);        /* thread id */
+    rt_w32(G_MEM, teb + 0x24, tid);                  /* thread id, independent of the reusable TEB */
     rt_w32(G_MEM, teb + 0x2c, tlsarr);
     rt_w32(G_MEM, teb + 0x30, PEB_ADDR);
     if (w32_tls_size || w32_tls_zero) {
         uint32_t blk = heap_alloc(w32_process_heap, 8, w32_tls_size + w32_tls_zero);
+        if (!blk) {
+            pthread_mutex_lock(&teb_lock); teb_used[k] = 0; pthread_mutex_unlock(&teb_lock);
+            return 0;
+        }
+        teb_tls[k] = blk;
         memcpy(G_MEM + blk, G_MEM + w32_tls_template, w32_tls_size);
         rt_w32(G_MEM, tlsarr + 4 * rt_r32(G_MEM, w32_tls_index_addr), blk);
     }
     return teb;
+}
+
+void w32_free_thread_teb(uint32_t teb)
+{
+    uint32_t k = (teb - TEB_BASE) / 0x2000;
+    if (teb < TEB_BASE || k >= MAX_THREADS) return;
+    uint32_t stack = rt_r32(G_MEM, teb + 8);
+    if (teb_tls[k]) { heap_free(w32_process_heap, teb_tls[k]); teb_tls[k] = 0; }
+    if (stack) vm_free(stack, 0, 0x8000);
+    pthread_mutex_lock(&teb_lock); teb_used[k] = 0; pthread_mutex_unlock(&teb_lock);
 }
 
 /* ---- image ---- */
