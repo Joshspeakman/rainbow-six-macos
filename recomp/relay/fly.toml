@@ -1,0 +1,33 @@
+# The Rainbow Six co-op relay on Fly.io (docs/R6-RELAY.md, "Running the relay"). Deploy from this folder:
+#   flyctl launch --copy-config --no-deploy      (once: creates the app; the name below must be free on Fly)
+#   flyctl deploy --ha=false                     (exactly one machine: rooms live in its memory)
+#   flyctl ips allocate-v4                       (once: a dedicated IPv4, billed monthly; plain TCP needs one)
+app = "r6coop-relay"
+primary_region = "ord"            # the region nearest the players: flyctl platform regions
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[[services]]
+  internal_port = 2346
+  protocol = "tcp"
+  auto_stop_machines = "off"      # never stopped or started by traffic: that would end every open room
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 2346                   # the default the launcher and relay.c use
+    handlers = ["proxy_proto"]    # PROXY v1: the relay sees each player's own address (--proxy-protocol)
+
+  [[services.ports]]
+    port = 443                    # for networks that only let out web ports
+    handlers = ["proxy_proto"]
+
+  [[services.tcp_checks]]
+    grace_period = "5s"
+    interval = "15s"
+    timeout = "2s"

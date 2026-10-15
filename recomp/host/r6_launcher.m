@@ -10,6 +10,7 @@
 // launchers); without it the window has only Quit and Play (and the game its own Options screen). The banner
 // is <game>/data/bitmap/mm_bg.RSB from the player's own copy.
 #import <AppKit/AppKit.h>
+#import <CommonCrypto/CommonDigest.h>
 #include "../runtime/edition.h"
 
 static NSString *const REG_KEY = @"hklm\\software\\red storm entertainment\\tom clancy's rainbow six";
@@ -43,6 +44,10 @@ static BOOL reg_get(NSString *name, uint32_t *type, NSData **data)
 {
     for (NSString *line in reg_lines) { NSArray *p = reg_fields(line, name); if (!p) continue; *type = (uint32_t)[p[2] intValue]; *data = unhex(p[3]); return YES; }
     return NO;
+}
+static void reg_delete(NSString *name)
+{
+    for (NSInteger k = (NSInteger)reg_lines.count - 1; k >= 0; k--) if (reg_fields(reg_lines[k], name)) [reg_lines removeObjectAtIndex:k];
 }
 static void reg_set(NSString *name, uint32_t type, NSData *data)
 {
@@ -183,6 +188,7 @@ static void cycle(NSString *rid, NSInteger d)
     NSInteger n = (NSInteger)ch.count;
     i = i >= 0 ? ((i + d) % n + n) % n : (d > 0 ? 0 : n - 1);
     values[rid] = str(ch[i][@"value"]) ?: @"";
+    void refresh_top(void); refresh_top();         /* rows shown only for some values (Play Online's room codes) */
 }
 
 /* a "modes" row (Mission Resolution) also offers this display's own sizes, the ones main.m gives the game's mode list
@@ -248,6 +254,130 @@ static void apply(void)
     else if (fps.intValue > 0) setenv("DSR_FPSCAP", [NSString stringWithFormat:@"%d", fps.intValue].UTF8String, 0);
     if (full) setenv("DS_WINDOW_MODE", [full caseInsensitiveCompare:@"FALSE"] == NSOrderedSame ? "windowed" : "fullscreen", 0);
     if ([value_of_reg(@"R6MacMouseInput") isEqualToString:@"macos"]) setenv("DS_MOUSE", "macos", 0);
+}
+
+// ---------------------------------------------------------------- Play Online (docs/R6-RELAY.md)
+/* Internet co-op through the relay, as linux_launcher/r6_online.py (Windows and Linux): the launcher's own rows (not in
+ * the mod's spec), room codes, and what Play sets: the runtime's R6_RELAY* environment (relay.c) and the game options
+ * relay play needs, each player's own value kept under R6RelaySaved.<name> and put back once Play Online is Off. */
+const char *r6_launcher_exe;                                      /* main.m: the mod's RainbowSix.exe (--exe) */
+static NSString *const CODE_ALPHABET = @"BCDFGHJKMPQRTVWXY2346789";   /* as r6relay.py: no vowels, no 0/O, 1/I/L or 5/S */
+enum { CODE_LEN = 6 };
+static NSString *const DEFAULT_RELAY = @"r6coop-relay.fly.dev:2346", *const LOCAL_PORT = @"2356", *const SAVED = @"R6RelaySaved.";
+static NSArray<NSString *> *top_all;                              /* the top rows; top_ids: those shown now */
+static NSString *canon(NSString *c)                               /* a code as typed: any case, dashes and spaces */
+{
+    NSArray *parts = [c ?: @"" componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return [[[parts componentsJoinedByString:@""] uppercaseString] stringByReplacingOccurrencesOfString:@"-" withString:@""];
+}
+static BOOL valid_code(NSString *c)
+{
+    if (c.length != CODE_LEN) return NO;
+    for (NSUInteger k = 0; k < c.length; k++) if ([CODE_ALPHABET rangeOfString:[c substringWithRange:NSMakeRange(k, 1)]].location == NSNotFound) return NO;
+    return YES;
+}
+static NSString *pretty(NSString *c) { return valid_code(c) ? [NSString stringWithFormat:@"%@-%@", [c substringToIndex:3], [c substringFromIndex:3]] : c; }
+static NSString *new_code(void)
+{
+    NSMutableString *c = [NSMutableString string];
+    for (int k = 0; k < CODE_LEN; k++) [c appendString:[CODE_ALPHABET substringWithRange:NSMakeRange(arc4random_uniform((uint32_t)CODE_ALPHABET.length), 1)]];
+    return c;
+}
+static BOOL row_visible(NSString *rid)                            /* "visible_if": {row: value}, all of them */
+{
+    NSDictionary *w = dict(rows[rid][@"visible_if"]);
+    for (NSString *k in w) if (![values[k] ?: @"" isEqualToString:str(w[k]) ?: @""]) return NO;
+    return YES;
+}
+void refresh_top(void)
+{
+    if (!top_all) return;
+    NSMutableArray *t = [NSMutableArray array]; for (NSString *rid in top_all) if (row_visible(rid)) [t addObject:rid];
+    top_ids = t;
+}
+static void add_online_rows(void)
+{
+    NSArray<NSDictionary *> *add = @[
+        @{@"id": @"online_mode", @"label": @"Play Online", @"type": @"choice", @"reg": @"R6RelayMode", @"store": @"sz", @"default": @"off", @"note": @"",
+          @"choices": @[@{@"value": @"off", @"label": @"Off", @"note": @"LAN games and addresses, as set in Multiplayer"},
+                        @{@"value": @"host", @"label": @"Host a Room", @"note": @"Friends join with your room code; no ports or firewall to set up"},
+                        @{@"value": @"join", @"label": @"Join a Room", @"note": @"Type the host's room code below"}]},
+        @{@"id": @"host_code", @"label": @"Your Room Code", @"type": @"text", @"reg": @"R6RelayHostCode", @"store": @"sz", @"default": @"", @"textmax": @7,
+          @"note": @"Give it to your friends. In the game: Multiplayer, Create Game", @"visible_if": @{@"online_mode": @"host"}},
+        @{@"id": @"join_code", @"label": @"Room Code", @"type": @"text", @"reg": @"R6RelayJoinCode", @"store": @"sz", @"default": @"", @"textmax": @7,
+          @"note": @"In the game: Multiplayer, Manual Join, Join", @"visible_if": @{@"online_mode": @"join"}},
+        @{@"id": @"relay_server", @"label": @"Relay", @"type": @"text", @"reg": @"R6RelayServer", @"store": @"sz", @"default": DEFAULT_RELAY, @"textmax": @63,
+          @"note": @"Only change this to use your own relay"}];
+    for (NSDictionary *r in add) if (!rows[r[@"id"]]) { rows[r[@"id"]] = r; [row_order addObject:r[@"id"]]; }
+    NSMutableArray *t = [top_ids mutableCopy];
+    for (NSString *rid in @[@"online_mode", @"host_code", @"join_code"]) if (![t containsObject:rid]) [t addObject:rid];
+    top_all = t;
+    NSMutableArray *g = [groups mutableCopy]; NSInteger mp = -1;
+    for (NSUInteger k = 0; k < g.count; k++) if ([g[k][@"rows"] containsObject:@"player_name"]) { mp = (NSInteger)k; break; }
+    if (mp < 0) { mp = MAX(0, (NSInteger)g.count - 1); [g insertObject:@{@"title": @"ONLINE", @"rows": @[], @"guide": @NO} atIndex:(NSUInteger)mp]; }   /* before KEY GUIDE */
+    NSMutableArray *ids = [g[mp][@"rows"] mutableCopy];
+    if (![ids containsObject:@"relay_server"]) [ids addObject:@"relay_server"];
+    NSMutableDictionary *d = [g[mp] mutableCopy]; d[@"rows"] = ids; g[mp] = d; groups = g;
+}
+static void prepare_online(void)                                  /* at start-up: a host's code is made once, then kept */
+{
+    if (rows[@"host_code"] && !valid_code(canon(values[@"host_code"]))) values[@"host_code"] = pretty(new_code());
+    refresh_top();
+}
+static NSString *online_check(void)                               /* nil, or what is wrong with the room settings */
+{
+    NSString *mode = values[@"online_mode"] ?: @"off";
+    if (!rows[@"online_mode"] || [mode isEqualToString:@"off"]) return nil;
+    if (![values[@"relay_server"] ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].length) return @"Enter the relay address in Multiplayer (Relay).";
+    NSString *code = canon(values[[mode isEqualToString:@"host"] ? @"host_code" : @"join_code"]);
+    if ([mode isEqualToString:@"join"] && !code.length) return @"Enter the host's room code.";
+    if (!valid_code(code)) return [NSString stringWithFormat:@"A room code is %d letters and digits (no vowels, and no 0, 1 or 5), like %@.", CODE_LEN, pretty(@"K7QM4X")];
+    return nil;
+}
+/* after the rows are written, before the file is saved: with a room, the options relay play needs (everything over the
+ * one TCP connection; no UDP game list, no router mapping; a joiner's Manual Join at its bridge), each player's own
+ * value saved first, once; with Play Online off, the saved values back */
+static void apply_online_registry(void)
+{
+    if (!rows[@"online_mode"]) return;
+    NSString *mode = values[@"online_mode"] ?: @"off";
+    NSDictionary *always = @{@"MultiplayerBehindFirewall": @"TRUE", @"R6CoopOnline": @"FALSE", @"R6CoopRouter": @"FALSE"};
+    NSDictionary *join = @{@"MultiplayerManualHostAddress": @"127.0.0.1", @"MultiplayerManualJoinPort": LOCAL_PORT};
+    NSMutableDictionary *forced = [NSMutableDictionary dictionary];
+    if (![mode isEqualToString:@"off"]) { [forced addEntriesFromDictionary:always]; if ([mode isEqualToString:@"join"]) [forced addEntriesFromDictionary:join]; }
+    for (NSString *name in [always.allKeys arrayByAddingObjectsFromArray:join.allKeys]) {
+        uint32_t st, ct; NSData *sd, *cd; BOOL saved = reg_get([SAVED stringByAppendingString:name], &st, &sd);
+        if (forced[name]) {
+            if (!saved) { if (reg_get(name, &ct, &cd)) reg_set([SAVED stringByAppendingString:name], ct, cd); else reg_set([SAVED stringByAppendingString:name], 0, [NSData data]); }
+            NSMutableData *v = [latin1(forced[name]) mutableCopy]; [v appendBytes:"" length:1]; reg_set(name, REG_SZ, v);
+        } else if (saved) {                                       /* not forced now: the player's own value back */
+            if (st == 0) reg_delete(name); else reg_set(name, st, sd);
+            reg_delete([SAVED stringByAppendingString:name]);
+        }
+    }
+}
+/* what the relay compares between host and joiners: the mod's RainbowSix.exe, the same file on every platform (never
+ * the Mac's own binary): the first 16 hex digits of its SHA-256 */
+static NSString *build_id(void)
+{
+    NSData *d = r6_launcher_exe ? [NSData dataWithContentsOfFile:@(r6_launcher_exe) options:NSDataReadingMappedIfSafe error:nil] : nil;
+    if (!d) return @"unknown";
+    uint8_t h[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(d.bytes, (CC_LONG)d.length, h);
+    NSMutableString *s = [NSMutableString string]; for (int k = 0; k < 8; k++) [s appendFormat:@"%02x", h[k]];
+    return s;
+}
+/* Play: the runtime's relay settings (relay.c), none with Play Online off */
+static void relay_env(NSString *data)
+{
+    for (NSString *n in @[@"R6_RELAY", @"R6_ROOM", @"R6_RELAY_CODE", @"R6_RELAY_NAME", @"R6_RELAY_BUILD", @"R6_RELAY_STATUS", @"R6_RELAY_LOCAL_PORT"]) unsetenv(n.UTF8String);
+    NSString *mode = values[@"online_mode"] ?: @"off";
+    if (!rows[@"online_mode"] || [mode isEqualToString:@"off"]) return;
+    setenv("R6_RELAY", [values[@"relay_server"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].UTF8String, 1);
+    setenv("R6_RELAY_BUILD", build_id().UTF8String, 1);
+    setenv("R6_RELAY_NAME", ([values[@"player_name"] length] ? values[@"player_name"] : @"player").UTF8String, 1);
+    setenv("R6_RELAY_STATUS", [data stringByAppendingPathComponent:@"relay-status.txt"].UTF8String, 1);
+    if ([mode isEqualToString:@"host"]) { setenv("R6_ROOM", "host", 1); setenv("R6_RELAY_CODE", canon(values[@"host_code"]).UTF8String, 1); }
+    else { setenv("R6_ROOM", canon(values[@"join_code"]).UTF8String, 1); setenv("R6_RELAY_LOCAL_PORT", LOCAL_PORT.UTF8String, 1); }
 }
 
 /* reads r6coop-launcher.json: the game folder's, else a copy in the app; NO when there is none (or it can't be read) */
@@ -464,7 +594,7 @@ static void fill(NSRect r, NSColor *c) { [c setFill]; NSRectFill(r); }
 {
     NSTextField *e = self.edit; NSString *rid = self.editRid; if (!e) return;
     self.edit = nil; self.editRid = nil;
-    if (keep) { NSInteger max = [rows[rid][@"textmax"] integerValue] ?: 31; NSString *t = e.stringValue; values[rid] = t.length > (NSUInteger)max ? [t substringToIndex:max] : t; }
+    if (keep) { NSInteger max = [rows[rid][@"textmax"] integerValue] ?: 31; NSString *t = e.stringValue; values[rid] = t.length > (NSUInteger)max ? [t substringToIndex:max] : t; refresh_top(); }
     [e removeFromSuperview]; [self.window makeFirstResponder:self]; self.needsDisplay = YES;
 }
 - (void)controlTextDidChange:(NSNotification *)n
@@ -580,6 +710,7 @@ static BOOL save_all(NSString *data, NSString *kmpName, NSString **why)
     if (have_spec && row_order.count) {
         reg_load(regPath);                                   /* again: the file as it is now */
         for (NSString *rid in row_order) write_value(rows[rid], values[rid] ?: @"");
+        apply_online_registry();                             /* Play Online: the game options relay play needs, or the player's back */
         if (!reg_save(regPath, &err)) { *why = [NSString stringWithFormat:@"%@: %@", regPath, err.localizedDescription]; return NO; }
         if (layouts.count) {
             NSString *dir = [data stringByAppendingPathComponent:@"game"], *path = find_ci(dir, kmpName) ?: [dir stringByAppendingPathComponent:kmpName];
@@ -605,14 +736,21 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     @try { have_spec = load_spec(game); }
     @catch (NSException *x) { (void)x; have_spec = NO; [rows removeAllObjects]; [row_order removeAllObjects]; [layouts removeAllObjects]; top_ids = @[]; groups = @[]; actions = @[]; }   /* a malformed spec: as none */
     if (!have_spec) { [rows removeAllObjects]; [row_order removeAllObjects]; [layouts removeAllObjects]; [key_names removeAllObjects]; [vk_to_code removeAllObjects]; top_ids = @[]; groups = @[]; actions = @[]; }
-    add_modes(); if (have_spec) add_mac_rows();
+    add_modes(); if (have_spec) { add_mac_rows(); add_online_rows(); }
     reg_load([data stringByAppendingPathComponent:@"registry.txt"]);
     for (NSString *rid in rows) values[rid] = read_value(rows[rid]);
+    prepare_online();
     /* the key map now: the data folder's copy (the runtime reads it first), else the game folder's, else Classic */
     NSString *ovd = [data stringByAppendingPathComponent:@"game"];
     keys = read_kmp(find_ci(ovd, kmp_file)) ?: read_kmp(find_ci(game, kmp_file)) ?: [(layouts[@"classic"] ?: [NSMutableData dataWithLength:KMP_N]) mutableCopy];
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) { apply(); return 1; }   /* the stored settings, no window */
+    if (getenv("DS_LAUNCHER_PLAY") && !shot) {             /* tests: Play pressed at once, through the real Play path */
+        NSString *bad = online_check(), *why = nil;
+        if (bad) { fprintf(stderr, "launcher: %s\n", bad.UTF8String); exit(1); }
+        if (!save_all(data, kmp_file, &why)) { fprintf(stderr, "launcher: couldn't save the settings: %s\n", why.UTF8String); exit(1); }
+        relay_env(data); apply(); return 1;
+    }
 
     DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, W, H)];
     v.open = -1; v.bind = -1; v.hover = HIT_NONE;
@@ -624,6 +762,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         if ((e = getenv("DS_LAUNCHER_SET")))
             for (NSString *kv in [@(e) componentsSeparatedByString:@";"]) { NSRange eq = [kv rangeOfString:@"="]; NSString *id_ = eq.location != NSNotFound ? [kv substringToIndex:eq.location] : nil;
                 if (id_ && rows[id_]) values[id_] = [kv substringFromIndex:eq.location + 1]; }
+        refresh_top();
         if ((e = getenv("DS_LAUNCHER_OPEN"))) for (NSInteger i = 0; i < (NSInteger)groups.count; i++) if ([groups[i][@"title"] caseInsensitiveCompare:@(e)] == NSOrderedSame) v.open = i;
         if ((e = getenv("DS_LAUNCHER_BIND")) && v.guide && atoi(e) < (NSInteger)actions.count) v.bind = atoi(e);
         if ((e = getenv("DS_LAUNCHER_SCROLL"))) [v scrollPage:atoi(e)];
@@ -637,7 +776,11 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds]; [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
         [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(shot) atomically:YES];
         if (getenv("DS_LAUNCHER_APPLY")) {          /* development: the files written as Play would */
-            NSString *why = nil; BOOL ok = save_all(data, kmp_file, &why);
+            NSString *bad = online_check(); if (bad) printf("launcher: %s\n", bad.UTF8String);
+            NSString *why = nil; BOOL ok = !bad && save_all(data, kmp_file, &why);
+            if (ok) relay_env(data);
+            for (NSString *n in @[@"R6_RELAY", @"R6_ROOM", @"R6_RELAY_CODE", @"R6_RELAY_NAME", @"R6_RELAY_BUILD", @"R6_RELAY_STATUS", @"R6_RELAY_LOCAL_PORT"])
+                printf("launcher: %s=%s\n", n.UTF8String, getenv(n.UTF8String) ?: "(unset)");
             apply(); const char *f = getenv("DSR_FPSCAP"), *vs = getenv("DSR_VSYNC"), *wm = getenv("DS_WINDOW_MODE");
             printf("launcher: %s (controls %s; DSR_FPSCAP=%s DSR_VSYNC=%s DS_WINDOW_MODE=%s)\n", ok ? "saved" : why.UTF8String, layout_name().UTF8String,
                    f ? f : "(unset)", vs ? vs : "(unset)", wm ? wm : "(unset)");
@@ -652,7 +795,11 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     w.backgroundColor = BG; w.contentView = v; [w center]; [w makeFirstResponder:v];
     __block int result = 0;
     v.onPlay = ^{
-        NSString *why = nil;
+        NSString *why = nil, *bad = online_check();
+        if (bad) {                                    /* Play Online's settings first: nothing is saved or started */
+            NSAlert *a = [NSAlert new]; a.messageText = @"Play Online"; a.informativeText = bad; [a runModal];
+            return;
+        }
         if (!save_all(data, kmp_file, &why)) {        /* the window stays: nothing is started with half the settings */
             NSAlert *a = [NSAlert new]; a.messageText = @"Couldn't save the settings"; a.informativeText = why ?: @""; [a runModal];
             return;
@@ -666,6 +813,6 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     [NSApp runModalForWindow:w];
     [w orderOut:nil];
     if (!result) return 0;
-    apply();
+    relay_env(data); apply();
     return 1;
 }
