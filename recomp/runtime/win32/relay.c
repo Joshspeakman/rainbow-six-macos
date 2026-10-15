@@ -9,7 +9,8 @@
  *   joiner: a thread listens on 127.0.0.1:R6_RELAY_LOCAL_PORT (2356) from the first WSAStartup; the game joins that
  *           address (MultiplayerManualHostAddress/JoinPort; a connect to the join port elsewhere is sent there too), and each
  *           connection it makes is carried to the room's host.
- * R6_RELAY_NAME (host's name), R6_RELAY_BUILD (the first 16 hex digits of the game executable's SHA-256: the relay
+ * R6_RELAY_CODE (host: the room code to ask for, chosen by the launcher so it can show it before the game starts;
+ * without it the relay picks one), R6_RELAY_NAME (host's name), R6_RELAY_BUILD (the first 16 hex digits of the game executable's SHA-256: the relay
  * keeps different builds apart) and R6_RELAY_STATUS (a file rewritten with key=value lines: state, room, players,
  * message) come from the launcher too.
  * The pumps never block on a send: each connection has a queue, and a side whose queue is past HIGH is not read until
@@ -298,7 +299,8 @@ static void *host_main(void *arg)
     status("state=connecting\n");
     net_sock r = dial(why, sizeof why);
     if (r == NET_BAD) { status("state=error\nmessage=%s\n", why); return 0; }
-    char hello[200]; snprintf(hello, sizeof hello, "R6R1 host %s %s", cfg("R6_RELAY_NAME") ? cfg("R6_RELAY_NAME") : "player", build_id());
+    char hello[200]; snprintf(hello, sizeof hello, "R6R1 host %s %s %s", build_id(), cfg("R6_RELAY_CODE") ? cfg("R6_RELAY_CODE") : "*",
+                              cfg("R6_RELAY_NAME") ? cfg("R6_RELAY_NAME") : "player");
     if (send_frame(r, R_HELLO, 0, hello, strlen(hello)) || !readable(r, DIAL_MS) || read_frame(r, &kind, &peer, buf, &n) || kind != R_ROOM) {
         if (kind == R_ERROR) status("state=error\nmessage=%.*s\n", (int)n, (char *)buf);
         else status("state=error\nmessage=the relay did not answer\n");

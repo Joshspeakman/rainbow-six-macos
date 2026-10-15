@@ -40,8 +40,8 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         OPEN_CLIENTS.clear()
         self.server.close(); await self.server.wait_closed()
 
-    async def hosted(self):
-        h = await Client.open(self.port, f'R6R1 host JOHN DOE {BUILD}')
+    async def hosted(self, want='*'):
+        h = await Client.open(self.port, f'R6R1 host {BUILD} {want} JOHN DOE')
         kind, _, code = await h.recv()
         self.assertEqual(kind, R.ROOM); self.assertEqual(len(code), R.CODE_LEN)
         return h, code.decode()
@@ -102,8 +102,26 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         j = await self.joined(code); await h.recv()
         j.send(R.PING, 0, b'7'); self.assertEqual(await j.recv(), (R.PONG, 0, b'7'))
 
+    async def test_host_chooses_the_code(self):
+        h, code = await self.hosted('k7q-m4x')                           # as typed: case and dashes don't matter
+        self.assertEqual(code, 'K7QM4X')
+        j = await self.joined('K7QM4X'); self.assertEqual((await h.recv())[:2], (R.OPEN, 1))
+        twin = await Client.open(self.port, f'R6R1 host {BUILD} K7QM4X SOMEONE')
+        self.assertEqual(await twin.recv(), (R.ERROR, 0, b'room code in use'))
+        bad = await Client.open(self.port, f'R6R1 host {BUILD} K7QM4 SOMEONE')        # 5 characters
+        self.assertEqual(await bad.recv(), (R.ERROR, 0, b'bad room code'))
+        bad = await Client.open(self.port, f'R6R1 host {BUILD} K7QM4A SOMEONE')       # A: not in the alphabet
+        self.assertEqual(await bad.recv(), (R.ERROR, 0, b'bad room code'))
+
+    async def test_probing_codes_by_hosting_is_refused(self):
+        h, code = await self.hosted()
+        for _ in range(R.BAD_JOINS_PER_MIN):                             # "in use" tells a code exists: counted
+            c = await Client.open(self.port, f'R6R1 host {BUILD} {code} X'); await c.recv()
+        c = await Client.open(self.port, f'R6R1 join {code} {BUILD}')
+        kind, _, msg = await c.recv(); self.assertEqual(kind, R.ERROR); self.assertIn(b'wrong codes', msg)
+
     async def test_wrong_version_and_hello(self):
-        c = await Client.open(self.port, f'R6R9 host X {BUILD}')
+        c = await Client.open(self.port, f'R6R9 host {BUILD} * X')
         kind, _, msg = await c.recv(); self.assertEqual(kind, R.ERROR); self.assertIn(b'version', msg)
         c = await Client.open(self.port, 'R6R1 dance')
         self.assertEqual((await c.recv())[0], R.ERROR)

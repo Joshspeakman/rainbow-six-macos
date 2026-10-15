@@ -5,8 +5,10 @@ joiner's TCP connection to the host's game and back. Nothing is parsed past the 
 
 Wire format (relay.c speaks the same; docs/R6-RELAY.md): a frame is [u8 type][u8 peer][u16 length, big-endian] and
 the payload.
-  01 HELLO  client -> relay   "R6R1 host <name> <build>" or "R6R1 join <CODE> <build>"; <build>: the first 16 hex
-                              digits of the game executable's SHA-256 (a join to a host of another build is refused)
+  01 HELLO  client -> relay   "R6R1 host <build> <CODE|*> <name>" or "R6R1 join <CODE> <build>"; <build>: the first 16
+                              hex digits of the game executable's SHA-256 (a join to a host of another build is
+                              refused); a host's <CODE> is the room it asks for (the launcher's, shown before the game
+                              starts), * for any free one
   02 ROOM   relay -> host     the room's code
   03 OPEN   relay -> host     joiner <peer> arrived;  relay -> joiner (peer 0): you are in
   04 DATA   both ways         host side: peer = the joiner; joiner side: peer 0
@@ -40,6 +42,11 @@ MAX_PAYLOAD = 4096
 WRITE_LIMIT = 256 << 10                          # bytes queued for one connection before it is dropped as stuck
 
 log = logging.getLogger('r6relay')
+
+
+def canon(code):
+    """a room code as typed: case and dashes don't matter"""
+    return code.upper().replace('-', '')
 
 
 def frame(kind, peer=0, payload=b''):
@@ -111,8 +118,8 @@ class Relay:
             words = body.decode('ascii', 'replace').split()
             if kind != HELLO or len(words) < 2 or words[0] != VERSION:
                 c.send(ERROR, 0, b'version: this relay speaks ' + VERSION.encode()); return
-            if words[1] == 'host' and len(words) >= 4: await self.host(c, words[-1].lower())   # the name may have spaces
-            elif words[1] == 'join' and len(words) == 4: await self.join(c, words[2].upper().replace('-', ''), words[3].lower())
+            if words[1] == 'host' and len(words) >= 5: await self.host(c, words[2].lower(), canon(words[3]))   # name: the rest
+            elif words[1] == 'join' and len(words) == 4: await self.join(c, canon(words[2]), words[3].lower())
             else: c.send(ERROR, 0, b'bad hello')
         except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError, OSError, FrameTooLong):
             pass
@@ -121,10 +128,15 @@ class Relay:
             self.conns[c.ip] -= 1
             if self.conns[c.ip] <= 0: del self.conns[c.ip]
 
-    async def host(self, c, build):
+    async def host(self, c, build, want):
         if len(self.rooms) >= MAX_ROOMS or self.hosted[c.ip] >= PER_IP_ROOMS:
             c.send(ERROR, 0, b'relay full, try again later'); return
-        room = Room(self.new_code(), c, build); self.rooms[room.code] = room; self.hosted[c.ip] += 1
+        if want != '*' and (len(want) != CODE_LEN or any(ch not in ALPHABET for ch in want)):
+            c.send(ERROR, 0, b'bad room code'); return
+        if want != '*' and self.refused(c.ip): c.send(ERROR, 0, b'too many wrong codes, wait a minute'); return
+        if want in self.rooms:                   # tells that the code exists: counted like a wrong join code
+            self.bad[c.ip].append(time.monotonic()); c.send(ERROR, 0, b'room code in use'); return
+        room = Room(self.new_code() if want == '*' else want, c, build); self.rooms[room.code] = room; self.hosted[c.ip] += 1
         log.info('%s: hosting %s', c.ip, room.code)
         c.send(ROOM, 0, room.code.encode())
         try:

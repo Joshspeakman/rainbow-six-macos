@@ -46,11 +46,11 @@ try:
     while 'listening' not in relay.stderr.readline(): pass
     base = dict(os.environ, R6_RELAY=f'127.0.0.1:{rport}', R6_RELAY_BUILD='4175039d2a57c4a7', R6_RELAY_NAME='JOHN DOE')
     host = subprocess.Popen([BIN, 'host', str(gport)], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,   # a listen on another port is not relayed
-                            env=dict(base, R6_ROOM='host', R6_RELAY_GAME_PORT=str(gport), R6_RELAY_STATUS=str(tmp / 'host.txt')))
+                            env=dict(base, R6_ROOM='host', R6_RELAY_CODE='K7QM4X', R6_RELAY_GAME_PORT=str(gport), R6_RELAY_STATUS=str(tmp / 'host.txt')))
     procs.append(host)
     st = status(tmp / 'host.txt', until=lambda s: s.get('state') == 'hosting')
     room = st.get('room', '')
-    check(st.get('state') == 'hosting' and len(room) == 6, f'host: room {room!r} in the status file')
+    check(st.get('state') == 'hosting' and room == 'K7QM4X', f'host: the room it asked for, {room!r}, in the status file')
 
     def join(code, build='4175039d2a57c4a7', size=100_000, name='j'):
         port = str(free_port())                                          # each joiner's own local listener

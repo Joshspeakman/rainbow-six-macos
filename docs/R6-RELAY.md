@@ -1,7 +1,24 @@
 # Rainbow Six internet co-op through a relay
 
-**Status: in development (branch `relay`).** The relay server and the runtime bridge pass their tests without the game.
-Not yet checked: the game itself joining through it, multi-joiner co-op, and the Mac port.
+**Status: in development (branch `relay`).** Co-op M01 through a local relay, driven by script
+(`tools/r6_relay_local.py --drive`), 2026-10-15:
+- Windows: a host and two joiners on one machine reached one lobby and the mission. Joiners arrived from 127.0.0.2 and
+  127.0.0.3.
+- macOS (rainbow-six-macos, branch `relay`): a host and one joiner; joiner movement shows on the host.
+
+Not yet checked: a relay on the internet, players on different machines, the launcher rows, and two joiners on a Mac
+host (both arrive from 127.0.0.1 there).
+
+**What the game uses with `MultiplayerBehindFirewall=TRUE`** (W32_NETLOG):
+- Each joiner opens exactly one TCP connection, to the host's join port; the host never connects back.
+- The game's UDP sockets (2347, 2348 and an ephemeral one) carry only LAN announcements and the server browser. In
+  relay mode they stay on loopback, and co-op needs none of them. A broadcast sendto fails with 10049 on macOS (it
+  succeeds on Windows), and a second game on one machine fails to bind 2347 (10048); the game ignores both.
+
+Menus, in 640x480 game coordinates for `DS_CMDFILE`: main menu Multiplayer (192,256). Multiplayer screen: Create Game
+(90,126), Manual Join (90,158), and M Player (90,222), which starts mplaynow.exe. Avoid it. Lobby: Cooperative
+(242,128), which gives M01, then Start Mission (535,383). Manual Join is pre-filled from the registry; Join is at
+(321,295).
 
 ## Why
 
@@ -25,6 +42,7 @@ VPN or needs admin rights, and nothing is left behind when the game closes. The 
 |---|---|
 | `R6_RELAY` | Relay address, `host[:port]` (port 2346 by default). Relay mode is on when this and `R6_ROOM` are both set |
 | `R6_ROOM` | `host` to host, or the room code to join (case and dashes don't matter) |
+| `R6_RELAY_CODE` | Host only: the room code to ask for. The launcher picks it and keeps it, so it can show the code before the game starts and friends can reuse it. Without it the relay picks a free code |
 | `R6_RELAY_NAME` | The host's player name, shown in the relay's log only |
 | `R6_RELAY_BUILD` | The first 16 hex digits of the game executable's SHA-256. A joiner whose build differs from the host's is refused |
 | `R6_RELAY_LOCAL_PORT` | Joiner only: the local listener's port (2356 by default, not 2346, which the joining game may bind itself). Different ports let host and joiners share one machine for tests |
@@ -57,7 +75,7 @@ TCP. Every message is a frame: `[u8 type][u8 peer][u16 length, big-endian][paylo
 
 | Type | Name | Direction | Payload and meaning |
 |---|---|---|---|
-| 01 | HELLO | client → relay | `R6R1 host <name> <build>` or `R6R1 join <CODE> <build>`. The first frame on a connection, within 10 s |
+| 01 | HELLO | client → relay | `R6R1 host <build> <CODE or *> <name>` or `R6R1 join <CODE> <build>`. The first frame on a connection, within 10 s. A host's `*` lets the relay pick the code; a code already open gets `room code in use` |
 | 02 | ROOM | relay → host | The room's code |
 | 03 | OPEN | relay → host | Joiner `<peer>` (1-15) arrived |
 | 03 | OPEN | relay → joiner | peer 0: you are in the room |
@@ -65,13 +83,13 @@ TCP. Every message is a frame: `[u8 type][u8 peer][u16 length, big-endian][paylo
 | 05 | CLOSE | both ways | That joiner's connection ended. To a joiner it means the host closed it; the relay then hangs up |
 | 06 | PING | either side | Answered with 07 PONG carrying the same payload. Clients ping every 15 s |
 | 07 | PONG | either side | |
-| 08 | ERROR | relay → client | Text: `no such room`, `room full`, `version: ...`, `too many wrong codes, wait a minute`, `relay full, try again later`. The relay then hangs up |
+| 08 | ERROR | relay → client | Text: `no such room`, `room full`, `room code in use`, `bad room code`, `version: ...`, `too many wrong codes, wait a minute`, `relay full, try again later`. The relay then hangs up |
 
 Room codes are 6 characters from `BCDFGHJKMPQRTVWXY2346789` (no vowels, and no 0/O, 1/I/L or 5/S).
 
 Relay limits: 15 joiners per room. A connection silent for 60 s is dropped. A connection whose unsent data passes
 256 KiB is dropped; a dropped joiner reaches the host as CLOSE, and a dropped host ends the room. Per address: 32
-connections and 4 hosted rooms. 20 wrong codes in a minute from one address refuse that address for a minute.
+connections and 4 hosted rooms. 20 wrong codes in a minute from one address refuse that address for a minute. A host's `room code in use` counts as a wrong code, since it shows that the code exists.
 These per-address limits count a public IP, so players behind one router (a LAN party) share them.
 
 ## Running the relay
