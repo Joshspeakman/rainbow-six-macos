@@ -58,6 +58,8 @@ def main():
     for a in ('binary', 'exe', 'game', 'out'): ap.add_argument('--' + a, required=True)
     ap.add_argument('--joiners', type=int, default=1)
     ap.add_argument('--relay-port', type=int, default=47100)
+    ap.add_argument('--drive', action='store_true', help='test mode: hidden windows, no sound, and each game reads '
+                    'commands appended to <out>/<game>/cmd.txt (DS_CMDFILE: click:x,y, key:vk, type:text, shot:png)')
     a = ap.parse_args()
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     build = hashlib.sha256(Path(a.exe).read_bytes()).hexdigest()[:16]
@@ -71,6 +73,7 @@ def main():
         d = out / name; data = d / 'data'; data.mkdir(parents=True, exist_ok=True)
         prepare(data, name.upper(), extra)
         (d / 'status.txt').unlink(missing_ok=True)
+        if a.drive: (d / 'cmd.txt').write_text(''); env = dict(env, DS_TEST='1', W32_AUDIO_MUTE='1', DS_CMDFILE=str(d / 'cmd.txt'))
         log = (d / 'game.log').open('w')
         p = subprocess.Popen([a.binary, '--exe', a.exe, '--game', a.game, '--data', str(data)], stdout=log, stderr=log,
                              env=dict(base, R6_RELAY_STATUS=str(d / 'status.txt'), **env))
