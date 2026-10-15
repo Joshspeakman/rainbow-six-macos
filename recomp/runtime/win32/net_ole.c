@@ -9,6 +9,7 @@
 #include <unistd.h>
 IMPL(wsock32, ord115)                                                 /* WSAStartup(version, WSADATA*) */
 {
+    void relay_startup(void); relay_startup();                        /* internet co-op: a joiner's local listener */
     uint32_t d = ARG(1); memset(GP(d), 0, 400);
     rt_w16(G_MEM, d, ARG(0) & 0xffff); rt_w16(G_MEM, d + 2, 0x0202);
     strcpy((char *)GP(d + 4), "WinSock 2.0"); strcpy((char *)GP(d + 261), "Running");
@@ -55,8 +56,9 @@ IMPL(wsock32, ord52)
         if (!n) addrs[n++] = htonl(INADDR_LOOPBACK);
 #ifdef R6_EDITION
         /* Rainbow Six binds its host socket and LAN announcer to the first address: the interface of the default route
-         * (not a VPN or container bridge), or R6_HOST_IP; never the router's public address (it isn't this machine's) */
-        { uint32_t want = 0; const char *e = getenv("R6_HOST_IP"); struct in_addr ia;
+         * (not a VPN or container bridge), or R6_HOST_IP; never the router's public address (it isn't this machine's);
+         * 127.0.0.1 with the relay on (relay.c) */
+        { uint32_t want = 0; int relay_on(void); const char *e = relay_on() ? "127.0.0.1" : getenv("R6_HOST_IP"); struct in_addr ia;
           if (e && inet_pton(AF_INET, e, &ia) == 1) want = ia.s_addr;
           else { int s = socket(AF_INET, SOCK_DGRAM, 0); struct sockaddr_in to = {0}, me = {0}; socklen_t ml = sizeof me;
                  to.sin_family = AF_INET; to.sin_port = htons(9); to.sin_addr.s_addr = htonl(0xc0000201u);   /* 192.0.2.1: routed, never sent */

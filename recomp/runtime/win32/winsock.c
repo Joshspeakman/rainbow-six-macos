@@ -14,6 +14,11 @@
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif
+/* relay.c: internet co-op through r6relay (R6_RELAY) */
+void relay_bind_loopback(struct sockaddr_in *a);
+void relay_connect_target(struct sockaddr_in *a);
+void relay_listen(uint32_t s, uint16_t port);
+void relay_closed(uint32_t s);
 
 static void socket_no_sigpipe(int fd)
 {
@@ -52,6 +57,13 @@ static void netlog(const char *what, uint32_t sock, const uint8_t *p, long n)
     fprintf(stderr, "net: %s %x %ld:", what, sock, n);
     for (long k = 0; k < n && k < 48; k++) fprintf(stderr, " %02x", p[k]);
     fprintf(stderr, " |"); for (long k = 0; k < n && k < 48; k++) fputc(p[k] >= 32 && p[k] < 127 ? p[k] : '.', stderr); fprintf(stderr, "|\n");
+}
+/* W32_NETLOG=1: a socket call with its address (socket, bind, listen, sendto: which ports and protocols a game uses) */
+static void netlog_at(const char *what, uint32_t sock, const struct sockaddr_in *a, long n)
+{
+    if (!getenv("W32_NETLOG")) return;
+    char ip[32] = "-"; if (a) inet_ntop(AF_INET, &a->sin_addr, ip, sizeof ip);
+    fprintf(stderr, "net: %s %x %s:%u %ld\n", what, sock, ip, a ? ntohs(a->sin_port) : 0, n);
 }
 static uint32_t fail(Ctx *c, uint32_t e) { w32_set_last_error(c, e); return SOCKET_ERROR_; }
 static uint32_t fail_errno(Ctx *c) { return fail(c, wsa_err(errno)); }
@@ -92,27 +104,36 @@ IMPL(wsock32, ord23)                                    /* socket(af, type, prot
     if (fd < 0) { w32_set_last_error(c, wsa_err(errno)); RET(INVALID_SOCKET_, 3); }
     socket_no_sigpipe(fd);
     fcntl(fd, F_SETFD, FD_CLOEXEC);
+    /* Windows binds a TCP port whose last connections are still in TIME_WAIT; POSIX refuses without SO_REUSEADDR, so a
+     * game hosted again within a minute or two of the last one failed ("The Server could not be started"). Here
+     * SO_REUSEADDR only allows that: a port another socket is listening on still can't be bound. */
+    if (type == 1) { int one = 1; setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one); }
     pthread_mutex_lock(&s_lock); int k = 0; while (k < MAXS && S[k].fd) k++;
     if (k < MAXS) { S[k].fd = fd + 1; S[k].nb = 0; S[k].connecting = 0; }
     pthread_mutex_unlock(&s_lock);
     if (k == MAXS) { close(fd); w32_set_last_error(c, 10024); RET(INVALID_SOCKET_, 3); }
+    netlog_at(type == 1 ? "socket tcp" : "socket udp", SBASE + (uint32_t)k, 0, 0);
     RET(SBASE + (uint32_t)k, 3);
 }
 IMPL(wsock32, ord3)                                     /* closesocket(s) */
 {
     SOCK(ARG(0), 1);
     pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].fd = 0; pthread_mutex_unlock(&s_lock);
+    relay_closed(ARG(0));
     close(fd); RET(0, 1);
 }
 IMPL(wsock32, ord2)                                     /* bind(s, addr, len) */
 {
     SOCK(ARG(0), 3); struct sockaddr_in a; if (!to_host(ARG(1), ARG(2), &a)) RET(fail(c, 10014), 3);
-    if (bind(fd, (struct sockaddr *)&a, sizeof a)) RET(fail_errno(c), 3);
+    relay_bind_loopback(&a);
+    netlog_at("bind", ARG(0), &a, 0);
+    if (bind(fd, (struct sockaddr *)&a, sizeof a)) { uint32_t e = wsa_err(errno); netlog_at("bind failed", ARG(0), &a, (long)e); RET(fail(c, e), 3); }
     RET(0, 3);
 }
 IMPL(wsock32, ord4)                                     /* connect(s, addr, len) */
 {
     SOCK(ARG(0), 3); struct sockaddr_in a; if (!to_host(ARG(1), ARG(2), &a)) RET(fail(c, 10014), 3);
+    relay_connect_target(&a);
     if (getenv("W32_NETLOG")) { char ip[32]; inet_ntop(AF_INET, &a.sin_addr, ip, sizeof ip); fprintf(stderr, "net: connect %x to %s:%u (fd %d)\n", ARG(0), ip, ntohs(a.sin_port), fd); }
     if (connect(fd, (struct sockaddr *)&a, sizeof a)) {
         if (errno == EINPROGRESS && ARG(0) >= SBASE && ARG(0) < SBASE + MAXS) { pthread_mutex_lock(&s_lock); S[ARG(0) - SBASE].connecting = 1; pthread_mutex_unlock(&s_lock); }
@@ -120,7 +141,13 @@ IMPL(wsock32, ord4)                                     /* connect(s, addr, len)
     }
     RET(0, 3);
 }
-IMPL(wsock32, ord13) { SOCK(ARG(0), 2); if (listen(fd, (int)ARG(1))) RET(fail_errno(c), 2); RET(0, 2); }   /* listen */
+IMPL(wsock32, ord13)                                    /* listen(s, backlog) */
+{
+    SOCK(ARG(0), 2); if (listen(fd, (int)ARG(1))) RET(fail_errno(c), 2);
+    struct sockaddr_in a; socklen_t l = sizeof a;
+    if (!getsockname(fd, (struct sockaddr *)&a, &l)) { netlog_at("listen", ARG(0), &a, 0); relay_listen(ARG(0), ntohs(a.sin_port)); }   /* hosting: the room */
+    RET(0, 2);
+}
 IMPL(wsock32, ord1)                                     /* accept(s, addr, len*) */
 {
     SOCK(ARG(0), 3); struct sockaddr_in a; socklen_t l = sizeof a;
@@ -157,7 +184,8 @@ IMPL(wsock32, ord20)                                    /* sendto(s, buf, len, f
     SOCK(ARG(0), 6); struct sockaddr_in a; ssize_t n;
     if (ARG(4)) { if (!to_host(ARG(4), ARG(5), &a)) RET(fail(c, 10014), 6); n = sendto(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 1) | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a); }
     else n = send(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 1) | MSG_NOSIGNAL);
-    if (n < 0) RET(fail_errno(c), 6);
+    if (n < 0) { uint32_t e = wsa_err(errno); netlog_at("sendto failed", ARG(0), ARG(4) ? &a : 0, (long)e); RET(fail(c, e), 6); }
+    netlog_at("sendto", ARG(0), ARG(4) ? &a : 0, (long)n);
     RET((uint32_t)n, 6);
 }
 IMPL(wsock32, ord17)                                    /* recvfrom(s, buf, len, flags, from, fromlen*) */
@@ -165,6 +193,7 @@ IMPL(wsock32, ord17)                                    /* recvfrom(s, buf, len,
     SOCK(ARG(0), 6); struct sockaddr_in a; socklen_t l = sizeof a; memset(&a, 0, sizeof a);
     ssize_t n = recvfrom(fd, GP(ARG(1)), ARG(2), (int)(ARG(3) & 3), (struct sockaddr *)&a, &l);
     if (n < 0) RET(fail_errno(c), 6);
+    netlog_at("recvfrom", ARG(0), &a, (long)n);
     if (ARG(4)) to_guest(&a, ARG(4), ARG(5));
     RET((uint32_t)n, 6);
 }
