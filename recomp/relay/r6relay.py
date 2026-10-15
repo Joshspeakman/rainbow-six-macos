@@ -17,7 +17,12 @@ the payload.
   08 ERROR  relay -> client   text ("no such room", "room full", "version", ...); then the relay hangs up
 A payload is at most MAX_PAYLOAD bytes (senders split larger reads); an empty DATA is legal. Every socket has TCP_NODELAY.
 
-Usage: r6relay.py [--port 2346 --port 443 ...] [--host 0.0.0.0]. Standard library only (Python 3.8+)."""
+Behind a proxy that announces each client with the PROXY protocol (v1, the text header: Fly.io's "proxy_proto"
+handler), --proxy-protocol takes the client's address from that header; otherwise every player would seem to come from
+the proxy and share one address's limits. A connection without a valid header is then dropped.
+
+Usage: r6relay.py [--port 2346 --port 443 ...] [--host 0.0.0.0] [--proxy-protocol]. Standard library only (Python 3.8+).
+Deploying it: docs/R6-RELAY.md, "Running the relay" (Dockerfile and fly.toml beside this file)."""
 import argparse
 import asyncio
 import collections
@@ -56,6 +61,16 @@ def frame(kind, peer=0, payload=b''):
 class FrameTooLong(Exception): pass
 
 
+def proxy_source(line):
+    """a PROXY protocol v1 header ("PROXY TCP4 <src> <dst> <sport> <dport>\\r\\n"): the client's address; '' for
+    "PROXY UNKNOWN" (the proxy's own connection, e.g. a health check); None if it isn't a header"""
+    if len(line) > 107 or not line.endswith(b'\r\n'): return None
+    p = line[:-2].decode('ascii', 'replace').split(' ')
+    if p[:2] == ['PROXY', 'UNKNOWN']: return ''
+    if len(p) == 6 and p[0] == 'PROXY' and p[1] in ('TCP4', 'TCP6'): return p[2]
+    return None
+
+
 async def read_frame(reader):
     kind, peer, n = struct.unpack('>BBH', await reader.readexactly(4))
     if n > MAX_PAYLOAD: raise FrameTooLong(n)
@@ -92,7 +107,8 @@ class Room:
 
 
 class Relay:
-    def __init__(self):
+    def __init__(self, proxy_protocol=False):
+        self.proxy_protocol = proxy_protocol
         self.rooms = {}
         self.conns = collections.Counter()
         self.hosted = collections.Counter()
@@ -111,6 +127,14 @@ class Relay:
 
     async def serve(self, reader, writer):
         c = Conn(reader, writer)
+        if self.proxy_protocol:                  # the client's own address, before any limit is counted
+            async def header():                  # not "PROXY ": dropped at once, not after HELLO_TIMEOUT
+                start = await reader.readexactly(6)
+                return start + await reader.readuntil(b'\r\n') if start == b'PROXY ' else b''
+            try: ip = proxy_source(await asyncio.wait_for(header(), HELLO_TIMEOUT))
+            except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError, ConnectionError, OSError): ip = None
+            if ip is None: c.close(); return
+            if ip: c.ip = ip
         if self.conns[c.ip] >= PER_IP_CONNS: c.close(); return
         self.conns[c.ip] += 1
         try:
@@ -180,9 +204,10 @@ async def main(argv=None):
     ap = argparse.ArgumentParser(description='Rainbow Six co-op relay')
     ap.add_argument('--host', default='0.0.0.0')
     ap.add_argument('--port', type=int, action='append', help='TCP port to listen on (repeatable; default 2346)')
+    ap.add_argument('--proxy-protocol', action='store_true', help="each connection starts with a PROXY v1 header (behind Fly.io's proxy_proto)")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
-    relay = Relay()
+    relay = Relay(proxy_protocol=a.proxy_protocol)
     servers = [await asyncio.start_server(relay.serve, a.host, p) for p in (a.port or [2346])]
     for s in servers:
         for sock in s.sockets: log.info('listening on %s:%d', *sock.getsockname()[:2])

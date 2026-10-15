@@ -161,5 +161,53 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         finally: R.HELLO_TIMEOUT = old
 
 
+class ProxyProtocolTest(RelayTest.__base__):
+    """--proxy-protocol (behind Fly.io): the address in each PROXY v1 header is the client's, for every per-address limit"""
+    async def asyncSetUp(self):
+        self.relay = R.Relay(proxy_protocol=True)
+        self.server = await asyncio.start_server(self.relay.serve, '127.0.0.1', 0)
+        self.port = self.server.sockets[0].getsockname()[1]
+
+    asyncTearDown = RelayTest.asyncTearDown
+
+    async def client(self, src, hello):
+        r, w = await asyncio.open_connection('127.0.0.1', self.port)
+        c = Client(); c.r, c.w = r, w; OPEN_CLIENTS.append(c)
+        w.write(f'PROXY TCP4 {src} 10.0.0.1 51000 2346\r\n'.encode()); c.send(R.HELLO, 0, hello.encode())
+        return c
+
+    def test_header_parsing(self):
+        self.assertEqual(R.proxy_source(b'PROXY TCP4 203.0.113.7 10.0.0.1 51000 2346\r\n'), '203.0.113.7')
+        self.assertEqual(R.proxy_source(b'PROXY TCP6 2001:db8::1 2001:db8::2 51000 2346\r\n'), '2001:db8::1')
+        self.assertEqual(R.proxy_source(b'PROXY UNKNOWN\r\n'), '')
+        self.assertIsNone(R.proxy_source(b'PROXY TCP4 203.0.113.7\r\n'))
+        self.assertIsNone(R.proxy_source(b'GET / HTTP/1.1\r\n'))
+        self.assertIsNone(R.proxy_source(b'PROXY TCP4 ' + b'1' * 120 + b'\r\n'))
+
+    async def test_play_through_the_header(self):
+        h = await self.client('203.0.113.7', f'R6R1 host {BUILD} * HOST')
+        kind, _, code = await h.recv(); self.assertEqual(kind, R.ROOM)
+        j = await self.client('198.51.100.9', f'R6R1 join {code.decode()} {BUILD}')
+        self.assertEqual((await j.recv())[:2], (R.OPEN, 0))
+        self.assertEqual((await h.recv())[:2], (R.OPEN, 1))
+        j.send(R.DATA, 0, b'hi'); self.assertEqual(await h.recv(), (R.DATA, 1, b'hi'))
+        self.assertIn('203.0.113.7', self.relay.hosted)
+
+    async def test_limits_count_the_real_address(self):
+        h = await self.client('203.0.113.7', f'R6R1 host {BUILD} * HOST')
+        kind, _, code = await h.recv()
+        for _ in range(R.BAD_JOINS_PER_MIN):                             # one player guessing codes ...
+            c = await self.client('198.51.100.66', f'R6R1 join BBBBBB {BUILD}'); await c.recv()
+        c = await self.client('198.51.100.66', f'R6R1 join {code.decode()} {BUILD}')
+        self.assertEqual((await c.recv())[0], R.ERROR)
+        j = await self.client('198.51.100.9', f'R6R1 join {code.decode()} {BUILD}')   # ... doesn't lock out the others
+        self.assertEqual((await j.recv())[:2], (R.OPEN, 0))
+
+    async def test_no_header_is_dropped(self):
+        c = await Client.open(self.port, f'R6R1 host {BUILD} * HOST')   # a HELLO where the header should be
+        self.assertTrue(await c.eof())
+        self.assertFalse(self.relay.rooms)
+
+
 if __name__ == '__main__':
     unittest.main()

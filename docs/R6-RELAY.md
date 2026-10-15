@@ -44,7 +44,7 @@ VPN or needs admin rights, and nothing is left behind when the game closes. The 
 | `R6_ROOM` | `host` to host, or the room code to join (case and dashes don't matter) |
 | `R6_RELAY_CODE` | Host only: the room code to ask for. The launcher picks it and keeps it, so it can show the code before the game starts and friends can reuse it. Without it the relay picks a free code |
 | `R6_RELAY_NAME` | The host's player name, shown in the relay's log only |
-| `R6_RELAY_BUILD` | The first 16 hex digits of the game executable's SHA-256. A joiner whose build differs from the host's is refused |
+| `R6_RELAY_BUILD` | The first 16 hex digits (lowercase) of the SHA-256 of the mod's **RainbowSix.exe**, the game executable, never the platform's runtime binary (RainbowSixWindows.exe, the Mac app), which differs per platform: every launcher must hash the same file, or Mac and PC players never match. A joiner whose build differs from the host's is refused |
 | `R6_RELAY_LOCAL_PORT` | Joiner only: the local listener's port (2356 by default, not 2346, which the joining game may bind itself). Different ports let host and joiners share one machine for tests |
 | `R6_RELAY_GAME_PORT` | The game's join port, `MultiplayerGameJoinPort` (2346 by default). Only a host's `listen()` on this port opens a room |
 | `R6_RELAY_STATUS` | A file the runtime rewrites with `key=value` lines: `state` (connecting, hosting, ready, joined, error, idle), `room`, `players` (host), `message` (error) |
@@ -53,6 +53,41 @@ The launcher must also force these game options in relay mode, on every player:
 `MultiplayerBehindFirewall=TRUE` (everything over the one TCP connection), `R6CoopOnline=FALSE` (the mod's DHT list
 uses UDP), `R6CoopRouter=FALSE` (no UPnP), and `MultiplayerManualHostAddress=127.0.0.1` with
 `MultiplayerManualJoinPort` set to the local port (joiners).
+
+## Launcher: Play Online
+
+The launcher adds its own rows to the mod's `r6coop-launcher.json` at start-up, so the mod's file is unchanged. The
+logic is in `recomp/host/linux_launcher/r6_online.py`, with tests in `recomp/tests/r6_online_test.py`; the macOS
+launcher does the same.
+
+| Row | Where | Registry value | Shown |
+|---|---|---|---|
+| Play Online: Off / Host a Room / Join a Room | top, after Controls | `R6RelayMode` (`off`, `host`, `join`) | always |
+| Your Room Code | top | `R6RelayHostCode` | Host. Made once (e.g. `K7Q-M4X`) and kept; the player may type another valid code |
+| Room Code | top | `R6RelayJoinCode` | Join |
+| Relay | Multiplayer | `R6RelayServer`, default `r6coop-relay.fly.dev:2346` | always |
+
+A row's `"visible_if": {"online_mode": "host"}` shows it only in that mode.
+
+**Play** with Host or Join:
+1. **Checks the code:** 6 characters from the alphabet; case, dashes and spaces don't matter. Anything else gets a
+   message, and the game doesn't start.
+2. **Sets the runtime settings:**
+   - `R6_RELAY` is the Relay row;
+   - `R6_RELAY_BUILD` is the first 16 hex digits of the SHA-256 of the mod's `RainbowSix.exe`;
+   - `R6_RELAY_NAME` is the player name;
+   - `R6_RELAY_STATUS` is `<data>/relay-status.txt`;
+   - the host gets `R6_ROOM=host` and `R6_RELAY_CODE=<code>`; a joiner gets `R6_ROOM=<code>` and
+     `R6_RELAY_LOCAL_PORT=2356`.
+3. **Forces the game options relay play needs:** `MultiplayerBehindFirewall=TRUE`, `R6CoopOnline=FALSE` and
+   `R6CoopRouter=FALSE`; a joiner also gets `MultiplayerManualHostAddress=127.0.0.1` and
+   `MultiplayerManualJoinPort=2356`. The player's own values are kept first, as `R6RelaySaved.<name>`.
+
+Play with Off puts the kept values back, removes the kept copies, and clears every `R6_RELAY*` variable. In the
+game, the host uses Multiplayer, Create Game; a joiner uses Multiplayer, Manual Join, Join (already filled in).
+
+`DS_LAUNCHER_PLAY=1` presses Play at once, for driven tests. Verified 2026-10-15: a host and a joiner, each started
+this way on Windows, met in room 79J3TB on the Fly relay and reached M01; with Off, the player's own values came back.
 
 ## What the bridge does
 
@@ -100,6 +135,26 @@ python3 recomp/relay/r6relay.py --port 2346 --port 443
 
 It needs a machine reachable from the internet; that is the only thing anyone sets up, once. Players' firewalls and
 routers need nothing.
+
+### On Fly.io
+
+`recomp/relay` has the `Dockerfile` and `fly.toml`. Fly builds the image remotely, so no local Docker is needed.
+
+- **Install and log in:** install flyctl (`winget install Fly-io.flyctl` on Windows), then `flyctl auth login`.
+- **Deploy**, from `recomp/relay`:
+  ```
+  flyctl launch --copy-config --no-deploy     # once: creates the app (the name in fly.toml must be free on Fly)
+  flyctl deploy --ha=false                    # exactly one machine
+  flyctl ips allocate-v4                      # once: a dedicated IPv4 (billed monthly); plain TCP needs one
+  ```
+- **Address:** players use `<app>.fly.dev:2346`, or port 443 on networks that only allow web ports.
+- **Exactly one machine, never stopped:** rooms live in the relay's memory. Two machines would split rooms between
+  them, and a stopped machine ends every room. `fly.toml` sets `auto_stop_machines = "off"`, and `--ha=false` keeps
+  it to one machine. `flyctl scale count 1` puts it back to one if needed.
+- **Real player addresses:** Fly's `proxy_proto` handler sends each connection's real address in a PROXY v1 header.
+  The container runs the relay with `--proxy-protocol` to read it. Without that, every player would seem to come from
+  Fly's proxy and share one address's limits.
+- **Logs:** `flyctl logs` shows rooms opening and closing, and the address of each player who joins.
 
 ## Tests
 
