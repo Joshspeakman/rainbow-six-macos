@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh --game-dir <Rainbow Six, Delta Force or Delta Force 2 folder> [--app-dir DIR] [--data-dir DIR]
+# install.sh --game-dir <Rainbow Six, Delta Force or Delta Force 2 folder> [--app-dir DIR] [--data-dir DIR] [--in-place]
 #
 # Rainbow Six (GOG 1.04, or its RainbowSix.exe with the co-op mod patched in): "Rainbow Six.app" on macOS, the
 # launcher rainbow-six on Linux; data in ~/Games/RainbowSixNative. The folder needs RainbowSix.exe, SMACKW32.DLL,
@@ -16,7 +16,9 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GAME=""; APPS=""; DATA=""
+IN_PLACE=""
 while [ $# -gt 0 ]; do
+  case "$1" in --in-place) IN_PLACE=1; shift; continue;; esac
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
     *) echo "unknown option $1"; exit 1;;
@@ -33,6 +35,17 @@ DATA="${DATA:-$HOME/Games/${BIN}Native}"; mkdir -p "$DATA"
 echo "== recompiling $NAME from $GAME (a few minutes)"
 "$HERE/recomp/$BUILD" "$GAME" "$HERE/recomp/work/$G"
 OUT="$HERE/recomp/work/$G"
+# The game is copied into the data folder (game-files) and the app reads it from there, so the folder it was installed
+# from is no longer needed and can be deleted. On a Mac the copy is an APFS clone: it takes no extra space. Updates and
+# reinstalls keep using the copy. --in-place reads the given folder instead (nothing is copied).
+if [ -z "$IN_PLACE" ]; then case "$GAME/" in "$DATA"/*) ;; *)
+  GF="$DATA/game-files"; echo "== copying the game from $GAME into $GF"
+  mkdir -p "$DATA"; rm -rf "$GF.part"
+  if [ "$(uname -s)" = Darwin ]; then cp -cRL "$GAME" "$GF.part" 2>/dev/null || { rm -rf "$GF.part"; cp -RL "$GAME" "$GF.part"; }
+  else cp -RL --reflink=auto "$GAME" "$GF.part"; fi
+  rm -rf "$GF"; mv "$GF.part" "$GF"
+  echo "== the app reads the game from $GF: $GAME is no longer needed (delete it to free the space)"; GAME="$GF";;
+esac; fi
 Q_GAME=$(printf '%q' "$GAME"); Q_DATA=$(printf '%q' "$DATA")      # shell-quoted: any folder name is only data
 
 if [[ $(uname -s) == Linux ]]; then
