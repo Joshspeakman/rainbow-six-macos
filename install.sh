@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option $1"; exit 1;;
   esac
 done
-[ -n "$GAME" ] || { echo "usage: install.sh --game-dir <the Steam Delta Force or Delta Force 2 folder>"; exit 1; }
+[ -n "$GAME" ] || { echo "usage: install.sh --game-dir <the GOG Rainbow Six folder>"; exit 1; }
 GAME="$(cd "$GAME" && pwd)"
 BUILD=build_df.sh
 if [ -f "$GAME/RainbowSix.exe" ]; then G=r6; EXE=RainbowSix.exe; NAME="Rainbow Six"; BIN=RainbowSix; ID=rainbow-six; BUILD=build_r6.sh
@@ -62,9 +62,10 @@ LAUNCH
   if [ "$G" = r6 ]; then                       # the app grid: the game's own icon (goggame-*.ico), if the folder has it
     ICON=$(ls "$GAME"/goggame-*.ico 2>/dev/null | head -1 || true)
     [ -n "$ICON" ] && cp "$ICON" "$DEST/rainbow-six.ico"
+    DICON=$DEST/rainbow-six.ico; [ -f "$DICON" ] || DICON=applications-games   # no .ico in the folder: a theme icon, not a dangling path
     mkdir -p "$HOME/.local/share/applications"
     printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s\nIcon=%s\nTerminal=false\nCategories=Game;\n' \
-      "$NAME" "$HOME/.local/bin/$ID" "$DEST/rainbow-six.ico" > "$HOME/.local/share/applications/$ID.desktop"
+      "$NAME" "$HOME/.local/bin/$ID" "$DICON" > "$HOME/.local/share/applications/$ID.desktop"
   fi
   echo "== done: run $ID (data in $DATA)"; exit 0
 fi
@@ -91,7 +92,7 @@ cat > "$A/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>io.github.delta-force-macos.$ID</string>
+  <key>CFBundleIdentifier</key><string>io.github.rainbow-six-macos.$ID</string>
   <key>CFBundleExecutable</key><string>launcher</string>
   <key>CFBundleIconFile</key><string>icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
