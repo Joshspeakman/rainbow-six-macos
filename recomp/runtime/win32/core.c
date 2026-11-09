@@ -464,14 +464,72 @@ IMPL(kernel32, WaitForSingleObject)
     if (r < 0) { w32_set_last_error(c, 6); RET(0xffffffffu, 2); }
     RET((uint32_t)r, 2);
 }
+/* Wait-all changes no object until every one is ready. Each pass looks at all of them under hlock (CloseHandle frees objects
+ * under it, and it keeps a second wait-all from interleaving) and takes the whole set only when all are ready.
+ * Returns 0, 0x102 (timeout), -1 (bad handle) or -2 (a handle listed twice). */
+static int wait_all(Ctx *c, uint32_t hs, uint32_t n, uint32_t ms)
+{
+    Sync *obj[64]; int type[64]; uint32_t tid = w32_tid(c);
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        int ready = 1;
+        pthread_mutex_lock(&hlock);
+        for (uint32_t k = 0; k < n; k++) {
+            HObj *o = h_get(rt_r32(G_MEM, hs + 4 * k), 0);
+            if (!o || (o->type != H_EVENT && o->type != H_MUTEX && o->type != H_THREAD && o->type != H_SEMAPHORE)) { pthread_mutex_unlock(&hlock); return -1; }
+            obj[k] = o->p; type[k] = o->type;
+            for (uint32_t j = 0; j < k; j++) if (obj[j] == obj[k]) { pthread_mutex_unlock(&hlock); return -2; }
+        }
+        for (uint32_t k = 0; k < n; k++) pthread_mutex_lock(&obj[k]->m);
+        for (uint32_t k = 0; k < n && ready; k++) {
+            Sync *s = obj[k];
+            ready = type[k] == H_MUTEX ? s->count == 0 || s->owner == tid : type[k] == H_SEMAPHORE ? s->count > 0 : s->signaled != 0;
+        }
+        if (ready) for (uint32_t k = 0; k < n; k++) {
+            Sync *s = obj[k];
+            if (type[k] == H_MUTEX) { s->owner = tid; s->count++; }
+            else if (type[k] == H_SEMAPHORE) s->count--;
+            else if (type[k] == H_EVENT && !s->manual) s->signaled = 0;
+        }
+        for (uint32_t k = 0; k < n; k++) pthread_mutex_unlock(&obj[k]->m);
+        pthread_mutex_unlock(&hlock);
+        if (ready) return 0;
+        if (ms == 0) return 0x102;
+        if (w32_deterministic) rt_unhandled(c, rt_r32(G_MEM, c->esp), "wait would block on another thread (harness)");
+        if (ms != 0xffffffffu) {
+            struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+            if ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000 >= (long)ms) return 0x102;
+        }
+        usleep(1000);
+    }
+}
 IMPL(kernel32, WaitForMultipleObjects)
 {
     uint32_t n = ARG(0), hs = ARG(1), all = ARG(2), ms = ARG(3);
-    if (all) { for (uint32_t k = 0; k < n; k++) if (w32_wait_one(c, rt_r32(G_MEM, hs + 4 * k), ms) == 0x102) RET(0x102, 4); RET(0, 4); }
+    if (n == 0 || n > 64) { w32_set_last_error(c, 87); RET(0xffffffffu, 4); }
+    if (all) {
+        void w32_crash_wait_begin(int, uint32_t, uint32_t), w32_crash_wait_end(void);
+        if (ms) w32_crash_wait_begin(1, rt_r32(G_MEM, hs), ms);
+        int r = wait_all(c, hs, n, ms);
+        if (ms) w32_crash_wait_end();
+        if (r < 0) { w32_set_last_error(c, r == -2 ? 87 : 6); RET(0xffffffffu, 4); }
+        RET((uint32_t)r, 4);
+    }
+    pthread_mutex_lock(&hlock);                  /* a handle that names nothing fails the call, as on Windows */
+    for (uint32_t k = 0; k < n; k++) {
+        uint32_t h = rt_r32(G_MEM, hs + 4 * k);
+        if (h < 0xfffffffeu && !h_get(h, 0)) { pthread_mutex_unlock(&hlock); w32_set_last_error(c, 6); RET(0xffffffffu, 4); }
+    }
+    pthread_mutex_unlock(&hlock);
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {                                   /* any: poll (rarely used by this game) */
         for (uint32_t k = 0; k < n; k++) if (w32_wait_one(c, rt_r32(G_MEM, hs + 4 * k), 0) == 0) RET(k, 4);
         if (ms == 0) RET(0x102, 4);
-        usleep(1000); if (ms != 0xffffffffu && --ms == 0) RET(0x102, 4);
+        usleep(1000);
+        if (ms != 0xffffffffu) {
+            struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+            if ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000 >= (long)ms) RET(0x102, 4);
+        }
     }
 }
 IMPL(kernel32, CloseHandle) { RET(h_close(ARG(0)) || ARG(0) == 0xffffffffu || ARG(0) == 0xfffffffeu, 1); }

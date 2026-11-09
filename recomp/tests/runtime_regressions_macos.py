@@ -16,7 +16,7 @@ def check(repo):
         common = ['clang', '-O1', '-g', '-ffp-contract=off', '-ffunction-sections', '-fdata-sections',
             '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-mllvm', '-asan-globals=0',
             '-I'+str(runtime), '-I'+str(runtime/'win32'), '-I'+str(repo/'recomp/third_party/vulkan/include')]
-        cases = [('vm_gap', []), ('heap_lifecycle', ['heap','vm']), ('thread_lifecycle', ['core','threads','loader','heap','vm']),
+        cases = [('vm_gap', []), ('heap_lifecycle', ['heap','vm']), ('thread_lifecycle', ['core','threads','loader','heap','vm']), ('wait_all', ['core','threads','loader','heap','vm']),
             ('path_race',['files']), ('iface_lifecycle',['heap','vm']), ('dp8_large',['dp8proto']),
             ('message_queue',[]), ('pixel_conversion',[]), ('audio_mix',[]),
             ('vulkan_lifecycle',['vulkan_gen','heap','vm']), ('vulkan_lookup',['vulkan_gen','heap','vm'])]
