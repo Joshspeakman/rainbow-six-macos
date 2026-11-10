@@ -5,14 +5,14 @@ set -euo pipefail
 REPO="@REPO@"; ASSET="@ASSET@"
 API="${DS_UPDATE_API:-https://api.github.com}"; WEB="${DS_UPDATE_WEB:-https://github.com}"   # tests point these at a local server
 APP="$(cd "$(dirname "$0")/../.." && pwd)"
-if [ "${1:-}" = --check ]; then
-  curl -fsSL -m 20 "$API/repos/$REPO/releases/latest" | /usr/bin/plutil -extract tag_name raw -o - -
-  exit 0
-fi
+# the newest release, betas (pre-releases) included: GitHub's "latest" leaves pre-releases out
+newest() { curl -fsSL -m 20 "$API/repos/$REPO/releases?per_page=1" | /usr/bin/plutil -extract 0.tag_name raw -o - -; }
+if [ "${1:-}" = --check ]; then newest; exit 0; fi
 [ -w "$(dirname "$APP")" ] || { echo "== can't write to $(dirname "$APP"): drag the new version in from the download page instead"; exit 1; }
 T="$(mktemp -d)"; trap 'rm -rf "${T:?}"' EXIT
-echo "== downloading the newest version"
-curl -fsSL -m 1800 -o "$T/new.zip" "$WEB/$REPO/releases/latest/download/$ASSET"
+TAG="$(newest)"; [ -n "$TAG" ] || { echo "== couldn't reach the download page"; exit 1; }
+echo "== downloading $TAG"
+curl -fsSL -m 1800 -o "$T/new.zip" "$WEB/$REPO/releases/download/$TAG/$ASSET"
 echo "== unpacking"
 /usr/bin/ditto -x -k "$T/new.zip" "$T/x"
 NEW="$(/usr/bin/find "$T/x" -maxdepth 2 -name '*.app' -type d | /usr/bin/head -1)"
