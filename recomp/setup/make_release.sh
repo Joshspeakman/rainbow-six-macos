@@ -69,7 +69,7 @@ PLIST
 python3 "$S/check_release.py" "$A" "$GAME" "$S/game.json"
 codesign --force --deep -s - "$A"; codesign -v "$A"
 echo "== packaging"
-"$HERE/.venv/bin/python" -c 'import dmgbuild' 2>/dev/null || "$HERE/.venv/bin/pip" install -q dmgbuild
+"$HERE/.venv/bin/python" -c 'import dmgbuild' 2>/dev/null || "$HERE/.venv/bin/python" -m pip install -q dmgbuild   # (python -m pip: a moved clone's pip script points at the old place)
 D="$(mktemp -d)"; sed "s/@NAME@/$NAME/g" "$S/ReadMe.txt" > "$D/Read Me First.txt"
 rm -f "${REL:?}/${SLUG:?}.dmg" "${REL:?}/${SLUG:?}.zip"
 cat > "$D/settings.py" <<PY
