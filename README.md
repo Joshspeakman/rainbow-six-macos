@@ -7,7 +7,8 @@ CrossOver, Rosetta or an emulator.
 **This repository contains nothing from the game.** `./install.sh` reads the `RainbowSix.exe` and `SMACKW32.DLL` in
 your game folder, translates their machine code into C, and compiles that together with this project's runtime, which
 replaces the Windows, DirectX and audio functions the game calls. The build happens on your computer, in the
-git-ignored `recomp/work/` folder. The app reads the game's data from your folder and never changes it.
+git-ignored `recomp/work/` folder. The game is copied into the app's data folder (from the same disk an APFS clone,
+which takes almost no space), so the folder you installed from can be deleted afterwards; it is never changed.
 
 - [Status](#status)
 - [Stock game or co-op mod](#stock-game-or-co-op-mod)
@@ -27,6 +28,17 @@ git-ignored `recomp/work/` folder. The app reads the game's data from your folde
 
 This is beta software. The game plays from the intro through the menus into training and missions. The game's own
 multiplayer is **in alpha testing**. Some areas have had little or no testing (see [Known issues](#known-issues)).
+
+**A drag-and-drop app is coming.** Diablo II and the Dungeon Siege ports now ship a ready-made app that you drag to
+Applications and give your game folder; it builds the game on your Mac with the compiler it carries, no developer
+tools needed. Rainbow Six has the same installer in this repository (`recomp/setup`), but it isn't released yet:
+
+- it has to be tested with retail copies first: the stock GOG 1.04 `RainbowSix.exe` (and the other retail releases),
+  so the list of the game's code it ships matches what players have;
+- then the co-op fix (the patch behind [the co-op mod](#stock-game-or-co-op-mod)) becomes an option in the installer,
+  applied to your copy as it is set up.
+
+Until then, install with `./install.sh` as below.
 
 | Area | State |
 |---|---|
@@ -65,7 +77,10 @@ With the mod's `RainbowSix.exe` and its `r6coop-launcher.json` in the game folde
 - the mod's launch window ("Co-op Edition"): control layouts (Classic, Modern, Keyboard Only or Custom), a key guide
   that rebinds every action, and the mod's display settings: frame rate, field of view, HUD size, mission resolution,
   full screen or window;
-- missions at any resolution, including your display's own size. The stock game stops at 1024x768.
+- missions at any resolution, including your display's own size. The stock game stops at 1024x768;
+- **Play Online**: host or join a room over the internet through a relay (`r6coop-relay.fly.dev`, changeable in the
+  launch window), with a short room code and no port forwarding. Mac and Windows players have played co-op through it
+  both ways (see [docs/R6-RELAY.md](docs/R6-RELAY.md)).
 
 Without `r6coop-launcher.json` the launch window has only **Play** and **Quit**, and the settings are in the game's
 own Options screen.
@@ -126,12 +141,13 @@ Launchpad, or from Spotlight. You don't need to run `recomp/build_r6.sh` yoursel
 
 | Option | Default | |
 |---|---|---|
-| `--game-dir DIR` | (required) | the folder with `RainbowSix.exe`. It is only read. |
+| `--game-dir DIR` | (required) | the folder with `RainbowSix.exe`. It is only read, and copied into the data folder |
 | `--app-dir DIR` | `~/Applications` | where `Rainbow Six.app` goes |
-| `--data-dir DIR` | `~/Games/RainbowSixNative` | where settings, saves and logs go |
+| `--data-dir DIR` | `~/Games/RainbowSixNative` | where settings, saves, logs and the copy of the game go |
+| `--in-place` | | read the game from `--game-dir` instead of copying it (that folder then has to stay where it is) |
 
-The app remembers the game folder and data folder you installed it with, so keep the game folder where it was, or run
-`install.sh` again after moving it.
+The game is copied into `<data>/game-files`, and the app reads it from there, so the folder you named can be deleted
+afterwards. Updates and reinstalls keep using the copy.
 
 The built app contains a copy of your `RainbowSix.exe` and code translated from it. It is for your own use: don't
 share it.
@@ -141,6 +157,7 @@ share it.
 | | |
 |---|---|
 | `~/Applications/Rainbow Six.app` | the app |
+| `~/Games/RainbowSixNative/game-files/` | the copy of your game folder the app reads (unless `--in-place`) |
 | `~/Games/RainbowSixNative/registry.txt` | the game's options (on Windows these live in the registry) |
 | `~/Games/RainbowSixNative/game/` | everything the game writes: saved campaigns, plans, the key map (`sherman.kmp`), its own `Sherman.log` |
 | `~/Games/RainbowSixNative/RainbowSix.log` | the port's log (moved to `RainbowSix.old.log` at the next launch after it exceeds 5 MB) |
