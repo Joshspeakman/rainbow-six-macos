@@ -233,11 +233,53 @@ static uint32_t chan(uint32_t v, uint32_t mask)                         /* a mas
     int sh = __builtin_ctz(mask), bits = __builtin_popcount(mask); uint32_t x = (v & mask) >> sh, mx = (1u << bits) - 1;
     return bits >= 8 ? x >> (bits - 8) : (x * 255 + mx / 2) / mx;
 }
+typedef struct PixelChannel { uint32_t mask; unsigned shift, bits; uint8_t scale[256]; } PixelChannel;
+static void channel_prepare(PixelChannel *c,uint32_t mask) {
+    c->mask=mask; c->shift=mask?__builtin_ctz(mask):0; c->bits=__builtin_popcount(mask);
+    if(c->bits && c->bits<8) {
+        unsigned max=(1u<<c->bits)-1;
+        for(unsigned i=0;i<=max;i++) c->scale[i]=(i*255+max/2)/max;
+    }
+}
+static inline uint32_t channel_decode(const PixelChannel *c,uint32_t v) {
+    if(!c->mask) return 255;
+    uint32_t x=(v&c->mask)>>c->shift;
+    if(c->bits>=8) return x>>(c->bits-8);
+    unsigned max=(1u<<c->bits)-1;
+    return (c->mask>>c->shift)==max ? c->scale[x] : (x*255+max/2)/max;
+}
+/* Common packed formats have constant arithmetic, allowing SIMD conversion.
+ * Keep the original rounded expansion (bit replication is not always exact). */
+static inline uint32_t packed16(uint32_t v,int format) {
+    if(format==1) return (((v&0xf000)<<12)|((v&0x0f00)<<8)|((v&0xf0)<<4)|(v&15))*17u;
+    uint32_t red=format==2?(v>>11)&31:(v>>10)&31, green=format==2?(v>>5)&63:(v>>5)&31, blue=v&31;
+    return (format==3?(v&0x8000?0xff000000u:0):0xff000000u)|
+        ((red*255+15)/31)<<16|((green*255+(format==2?31:15))/(format==2?63:31))<<8|(blue*255+15)/31;
+}
+static inline void surface16(const PSurf *s,uint32_t *dst,int format) {
+    for(uint32_t y=0;y<s->h;y++) {
+        const uint8_t *row=G_MEM+s->mem+y*s->pitch;
+        for(uint32_t x=0;x<s->w;x++) {
+            uint16_t v;memcpy(&v,row+2*x,2);uint32_t pixel=packed16(v,format);
+            if(s->has_ck && v>=s->ck_lo && v<=s->ck_hi) pixel&=0xffffff;
+            dst[y*s->w+x]=pixel;
+        }
+    }
+}
 /* the surface's pixels as BGRA (0xAARRGGBB), through its pixel format; a colour-keyed pixel is fully transparent */
 static void surf_to_bgra(const PSurf *s, uint32_t *dst)
 {
     const uint8_t *src = G_MEM + s->mem; uint32_t bp = s->bpp / 8;
     uint32_t rm = s->pf[4], gm = s->pf[5], bm = s->pf[6], am = (s->pf[1] & 1) ? s->pf[7] : 0;
+    if(bp==2) {
+        if(am==0xf000 && rm==0xf00 && gm==0xf0 && bm==15) {surface16(s,dst,1);return;}
+        if(!am && rm==0xf800 && gm==0x7e0 && bm==31) {surface16(s,dst,2);return;}
+        if(am==0x8000 && rm==0x7c00 && gm==0x3e0 && bm==31) {surface16(s,dst,3);return;}
+        if(!am && rm==0x7c00 && gm==0x3e0 && bm==31) {surface16(s,dst,4);return;}
+    }
+    static __thread PixelChannel channels[4];
+    uint32_t masks[]={am,rm,gm,bm};
+    if(bp!=1) for(int k=0;k<4;k++) if(channels[k].mask!=masks[k]) channel_prepare(&channels[k],masks[k]);
     uint32_t lut[256];
     if (s->bpp == 8) for (int k = 0; k < 256; k++) { uint32_t e = s->pal ? s->pal->entries[k] : (uint32_t)k * 0x010101u;
         lut[k] = 0xff000000u | (e & 0xff) << 16 | (e & 0xff00) | (e >> 16 & 0xff); }
@@ -245,7 +287,7 @@ static void surf_to_bgra(const PSurf *s, uint32_t *dst)
         const uint8_t *r = src + y * s->pitch; uint32_t *o = dst + y * s->w;
         for (uint32_t x = 0; x < s->w; x++) {
             uint32_t v = bp == 1 ? r[x] : bp == 2 ? (uint32_t)(r[2 * x] | r[2 * x + 1] << 8) : (uint32_t)(r[4 * x] | r[4 * x + 1] << 8 | r[4 * x + 2] << 16 | (uint32_t)r[4 * x + 3] << 24);
-            uint32_t px = bp == 1 ? lut[v] : chan(v, am) << 24 | chan(v, rm) << 16 | chan(v, gm) << 8 | chan(v, bm);
+            uint32_t px = bp == 1 ? lut[v] : channel_decode(&channels[0],v) << 24 | channel_decode(&channels[1],v) << 16 | channel_decode(&channels[2],v) << 8 | channel_decode(&channels[3],v);
             if (s->has_ck && v >= s->ck_lo && v <= s->ck_hi) px &= 0x00ffffffu;
             o[x] = px;
         }

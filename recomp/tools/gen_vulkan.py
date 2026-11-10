@@ -19,7 +19,7 @@ MANUAL = {
     'vkGetInstanceProcAddr', 'vkGetDeviceProcAddr', 'vkCreateInstance', 'vkDestroyInstance', 'vkCreateDevice', 'vkDestroyDevice',
     'vkEnumerateInstanceExtensionProperties', 'vkEnumerateInstanceLayerProperties', 'vkEnumerateDeviceExtensionProperties',
     'vkEnumerateDeviceLayerProperties', 'vkEnumeratePhysicalDevices', 'vkGetDeviceQueue', 'vkCreateWin32SurfaceKHR',
-    'vkAllocateCommandBuffers', 'vkFreeCommandBuffers', 'vkAllocateMemory', 'vkFreeMemory', 'vkMapMemory', 'vkUnmapMemory',
+    'vkAllocateCommandBuffers', 'vkFreeCommandBuffers', 'vkDestroyCommandPool', 'vkAllocateMemory', 'vkFreeMemory', 'vkMapMemory', 'vkUnmapMemory',
     'vkFlushMappedMemoryRanges', 'vkInvalidateMappedMemoryRanges', 'vkQueueSubmit', 'vkQueuePresentKHR', 'vkWaitForFences',
     'vkGetFenceStatus', 'vkQueueWaitIdle', 'vkDeviceWaitIdle', 'vkCreateDebugUtilsMessengerEXT', 'vkDestroyDebugUtilsMessengerEXT',
     'vkCreateSwapchainKHR', 'vkGetSwapchainImagesKHR',

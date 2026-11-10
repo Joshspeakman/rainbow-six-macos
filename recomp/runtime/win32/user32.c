@@ -341,6 +341,16 @@ void (*w32_host_pump)(void);           /* backend: turn host events into posted 
  * messages, as on Windows); DispatchMessage calls the TIMERPROC when the timer has one */
 typedef struct Timer { uint32_t tid, hwnd, id, ms, proc; double due; } Timer;
 static Timer timers[64]; static pthread_mutex_t tlock = PTHREAD_MUTEX_INITIALIZER;
+void w32_thread_queue_closed(uint32_t tid)
+{
+    pthread_mutex_lock(&qlock);
+    for (int k = 0; k < MAX_THREADS; k++) if (queues[k].tid == tid) memset(&queues[k], 0, sizeof queues[k]);
+    pthread_mutex_unlock(&qlock);
+    pthread_mutex_lock(&tlock);
+    for (int k = 0; k < 64; k++) if (timers[k].tid == tid) memset(&timers[k], 0, sizeof timers[k]);
+    pthread_mutex_unlock(&tlock);
+}
+
 static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 static int timer_due(Ctx *c, uint32_t out, uint32_t hwnd, uint32_t lo, uint32_t hi, int remove)
 {
@@ -368,7 +378,11 @@ static int peek(Ctx *c, uint32_t out, uint32_t hwnd, uint32_t lo, uint32_t hi, i
         if (hwnd && m->hwnd != hwnd) continue;
         if ((lo || hi) && (m->msg < lo || m->msg > hi)) continue;
         memcpy(GP(out), m, sizeof *m);
-        if (remove) { for (int j = k; j < q->n - 1; j++) q->q[(q->head + j) % 512] = q->q[(q->head + j + 1) % 512]; q->n--; }
+        if (remove) {
+            if (!k) q->head = (q->head + 1) % 512;
+            else for (int j = k; j < q->n - 1; j++) q->q[(q->head + j) % 512] = q->q[(q->head + j + 1) % 512];
+            q->n--;
+        }
         pthread_mutex_unlock(&qlock); return 1;
     }
     if (q->quit) {

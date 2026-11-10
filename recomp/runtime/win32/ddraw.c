@@ -93,13 +93,14 @@ static uint32_t free_slot[65536], nfree_slot;   /* released slots, reused only o
 uint32_t make_iface(int type, void *p)
 {
     pthread_mutex_lock(&obj_lock);
-    /* new ids while there are any (stale pointers stay detectable), then the released ones: a long session must not
-     * run out (every surface takes two) */
-    uint32_t k = nobjs < 65536 ? nobjs++ : nfree_slot ? free_slot[--nfree_slot] : 0;
-    objs[k].type = type; objs[k].p = p;
+    uint32_t k = nobjs < 65536 ? nobjs : nfree_slot ? free_slot[nfree_slot - 1] : 0;
+    uint32_t g = k ? heap_alloc(w32_process_heap, 8, 16) : 0;
+    if (g) {
+        if (nobjs < 65536) nobjs++; else nfree_slot--;
+        objs[k].type = type; objs[k].p = p;
+        rt_w32(G_MEM, g, vt[type]); rt_w32(G_MEM, g + 4, k);
+    }
     pthread_mutex_unlock(&obj_lock);
-    uint32_t g = heap_alloc(w32_process_heap, 8, 16);
-    rt_w32(G_MEM, g, vt[type]); rt_w32(G_MEM, g + 4, k);
     return g;
 }
 void *obj(uint32_t g, int type)
@@ -112,7 +113,7 @@ void obj_drop(uint32_t g)                        /* an interface's object is gon
 {
     uint32_t k = g ? rt_r32(G_MEM, g + 4) : 0;
     pthread_mutex_lock(&obj_lock);
-    if (k && k < 65536 && objs[k].type) { objs[k].type = 0; objs[k].p = 0; free_slot[nfree_slot++] = k; }
+    if (k && k < 65536 && objs[k].type) { objs[k].type = 0; objs[k].p = 0; free_slot[nfree_slot++] = k; heap_free(w32_process_heap, g); }
     pthread_mutex_unlock(&obj_lock);
 }
 #define ME(T, ty) T *me = obj(ARG(0), ty); if (!me) { fprintf(stderr, "dsr: bad " #T " %08x\n", ARG(0)); RET(DDERR_INVALIDPARAMS, nargs_); }

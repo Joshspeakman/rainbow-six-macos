@@ -78,7 +78,7 @@ size_t dp8_dec_dframe(const uint8_t *p, size_t len, dp8_dframe *f)
 
 /* ---------------------------------------------------------------- connections */
 typedef struct Frame { uint8_t *buf; size_t len; uint32_t sent, rto; int retries; int acked; } Frame;
-typedef struct Msg { struct Msg *next; uint8_t *data; size_t len; uint8_t user; } Msg;
+typedef struct Msg { struct Msg *next; uint8_t *data; size_t len, offset; uint8_t user; } Msg;
 typedef struct Rx { int have; uint8_t cmd, ctl; uint8_t *data; size_t len; } Rx;
 enum { ST_CONNECTING, ST_ACCEPTING, ST_ESTABLISHED, ST_CLOSING, ST_HARD_CLOSING, ST_CLOSED };
 struct dp8_conn {
@@ -181,17 +181,20 @@ static void transmit(dp8_conn *c, uint8_t seq, int retry)
 static void pump(dp8_conn *c)
 {
     while (c->q && (c->state == ST_ESTABLISHED || c->state == ST_CLOSING) && !c->end_sent) {
-        Msg *m = c->q; size_t frames = m->len ? (m->len + MAX_FRAME - 1) / MAX_FRAME : 1;
-        if (in_flight(c) + (int)frames > WINDOW - 1) break;
-        for (size_t k = 0; k < frames; k++) {
-            size_t off = k * MAX_FRAME, n = m->len - off < MAX_FRAME ? m->len - off : MAX_FRAME;
-            uint8_t cmd = CMD_DATA | CMD_RELIABLE | CMD_SEQUENTIAL | m->user | (k == 0 ? CMD_NEW_MSG : 0) | (k + 1 == frames ? CMD_END_MSG : 0);
-            if (k + 1 == frames && !c->q->next) cmd |= CMD_POLL;                       /* last frame of a burst: ACK now */
-            uint8_t seq = c->next_send++; Frame *f = &c->win[seq];
-            free(f->buf); f->buf = malloc(4 + n); f->buf[0] = cmd; f->buf[1] = 0; memcpy(f->buf + 4, m->data + off, n); f->len = 4 + n;
-            f->retries = 0; f->acked = 0; f->rto = c->rtt * 5 / 2 + 100;
-            transmit(c, seq, 0);
-        }
+        Msg *m = c->q;
+        if (in_flight(c) >= WINDOW - 1) break;
+        size_t off = m->offset, n = m->len - off < MAX_FRAME ? m->len - off : MAX_FRAME;
+        int last = off + n == m->len;
+        uint8_t cmd = CMD_DATA | CMD_RELIABLE | CMD_SEQUENTIAL | m->user |
+                      (off == 0 ? CMD_NEW_MSG : 0) | (last ? CMD_END_MSG : 0);
+        /* Ask for an ACK at a full window as well as the end of a burst. */
+        if (in_flight(c) == WINDOW - 2 || (last && !m->next)) cmd |= CMD_POLL;
+        uint8_t seq = c->next_send++; Frame *f = &c->win[seq];
+        free(f->buf); f->buf = malloc(4 + n); f->buf[0] = cmd; f->buf[1] = 0; memcpy(f->buf + 4, m->data + off, n); f->len = 4 + n;
+        f->retries = 0; f->acked = 0; f->rto = c->rtt * 5 / 2 + 100;
+        transmit(c, seq, 0);
+        m->offset += n;
+        if (!last) continue;
         c->q = m->next; if (!c->q) c->qtail = 0; free(m->data); free(m);
     }
 }
