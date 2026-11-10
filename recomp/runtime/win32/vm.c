@@ -56,6 +56,36 @@ static int range_free(uint32_t a, uint32_t n)
     }
     return 1;
 }
+/* R is sorted by base. Visit occupied intervals once instead of restarting a
+ * full region scan for every 64 KB candidate. Keep the same lowest/highest fit
+ * and granule ownership as the original allocator, including partial granules.
+ * Called with vm_lock held; wide arithmetic prevents endpoint wraparound. */
+static uint32_t find_gap(uint32_t span, int top_down)
+{
+    if (!span || span > VM_HI - VM_LO) return 0;
+    if (top_down) {
+        uint64_t base = (VM_HI - span) & ~0xffffu;
+        for (int k = nR - 1; k >= 0; k--) {
+            uint64_t lo = R[k].base;
+            uint64_t hi = (lo + R[k].size + 0xffffu) & ~0xffffull;
+            if (lo >= base + span) continue;
+            if (hi <= base) return (uint32_t)base;
+            if (lo < (uint64_t)VM_LO + span) return 0;
+            base = (lo - span) & ~0xffffull;
+        }
+        return (uint32_t)base;
+    }
+    uint64_t base = VM_LO;
+    for (int k = 0; k < nR; k++) {
+        uint64_t lo = R[k].base;
+        uint64_t hi = (lo + R[k].size + 0xffffu) & ~0xffffull;
+        if (hi <= base) continue;
+        if (lo >= base + span) return (uint32_t)base;
+        base = hi;
+        if (base + span > VM_HI) return 0;
+    }
+    return (uint32_t)base;
+}
 void vm_register(uint32_t base, uint32_t size, uint32_t type)
 {
     pthread_mutex_lock(&vm_lock);
@@ -75,9 +105,8 @@ uint32_t vm_alloc(uint32_t addr, uint32_t size, uint32_t type, uint32_t prot)
         uint32_t psz = addr ? ((end + 0xfff) & ~0xfffu) - base : (size + 0xfff) & ~0xfffu;
         span = (psz + 0xffff) & ~0xffffu;
         if (!addr) {
-            if (type & MEM_TOP_DOWN) { for (base = (VM_HI - span) & ~0xffffu; base >= VM_LO && !range_free(base, span); base -= 0x10000) ; }
-            else { for (base = VM_LO; base + span <= VM_HI && !range_free(base, span); base += 0x10000) ; }
-            if (base < VM_LO || base + span > VM_HI) goto out;
+            base = find_gap(span, type & MEM_TOP_DOWN);
+            if (!base) goto out;
         } else if (!range_free(base, psz)) goto out;
         int k = insert(base, psz, 0x20000 /* MEM_PRIVATE */, prot);
         if (type & MEM_COMMIT) {

@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdarg.h>
 #include "../runtime/win32/winsock.c"
+#include "../runtime/win32/relay.c"
 uint8_t memory[8192];
 uint8_t *G_MEM = memory;
 static uint32_t last_error;

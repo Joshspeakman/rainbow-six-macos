@@ -606,6 +606,10 @@ int main(int argc, char **argv)
             else if (!strcmp(argv[k], "--game")) game = argv[k + 1];
             else if (!strcmp(argv[k], "--data")) data = argv[k + 1];
         }
+#ifdef DS_EASY_INSTALL
+        int ds_easy_install(const char **, const char **, const char **);   /* setup/setup_ui.m: returns only when the game is ready */
+        if (!exe && !game && !data) ds_easy_install(&exe, &game, &data);
+#endif
         if (!exe || !game || !data) { fprintf(stderr, "usage: DungeonSiegeNative --exe <DungeonSiege2.exe> --game <game folder> --data <data folder>\n"); return 1; }
         NSString *bin = [[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
         snprintf(dsr_snapshot_path, sizeof dsr_snapshot_path, "%s/dsr_snapshot.bin", bin.UTF8String);
@@ -631,9 +635,12 @@ int main(int argc, char **argv)
 #if defined(DF_EDITION) && !defined(R6_EDITION)
             if (0) {                                                  // Delta Force: its own settings screen (renderer, resolution) is the launcher
 #else                                                                 // Rainbow Six: the co-op mod's window (r6_launcher.m)
-            if (!getenv("DS_TEST") || getenv("DS_LAUNCHER_SHOT")) {
+            if (!getenv("DS_TEST") || getenv("DS_LAUNCHER_SHOT") || getenv("DS_LAUNCHER_PLAY")) {   /* DS_LAUNCHER_PLAY: a test through Play */
 #endif
                 [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+#ifdef R6_EDITION
+                { extern const char *r6_launcher_exe; r6_launcher_exe = exe; }   /* Play Online's build, from the mod's exe */
+#endif
                 if (!ds_launcher_run(game, data)) return 0;
             }
         }

@@ -2055,14 +2055,6 @@ IMPL(vulkan_1, vkDestroyBuffer)
     vkp.vkDestroyBuffer(device, buffer, 0);
     vk_arena_free(&a); RET(0, 4);
 }
-IMPL(vulkan_1, vkDestroyCommandPool)
-{
-    VkArena a = {0};
-    VkDevice device = (VkDevice)vkh_host(ARG(0));
-    VkCommandPool commandPool = (VkCommandPool)((uint64_t)ARG(1) | (uint64_t)ARG(2) << 32);
-    vkp.vkDestroyCommandPool(device, commandPool, 0);
-    vk_arena_free(&a); RET(0, 4);
-}
 IMPL(vulkan_1, vkDestroyDescriptorPool)
 {
     VkArena a = {0};

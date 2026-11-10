@@ -13,7 +13,11 @@ uint8_t *G_MEM;
 
 struct rt_fn { uint32_t addr; GuestFn fn; };
 extern const struct rt_fn rt_fntab[];
+#ifdef RT_SPLIT                                 /* the game is a separate library, absent until setup has built it (setup/make_release.sh) */
+extern const unsigned rt_fntab_n __attribute__((weak));
+#else
 extern const unsigned rt_fntab_n;
+#endif
 struct rt_imp { uint32_t iat; const char *name; };
 extern const struct rt_imp rt_imptab[];
 extern const unsigned rt_imptab_n;
@@ -117,6 +121,35 @@ static void bw_generated_lock(Ctx *c)
 }
 #endif
 
+
+#ifndef DS2_BROKEN_WORLD
+static struct rt_fn *native_functions;
+static size_t native_mask;
+static uint32_t native_hash(uint32_t x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15;
+    x *= 0x846ca68bu; return x ^ (x >> 16);
+}
+__attribute__((constructor)) static void native_prepare_functions(void) {
+#ifdef RT_SPLIT
+    if (!&rt_fntab_n) return;                    /* no game yet: the setup window runs instead */
+#endif
+    const char *mode=getenv("RT_DISPATCH_CACHE");
+    if (mode && !strcmp(mode,"0")) return;
+    size_t n=1, count=rt_fntab_n;
+    if (count > SIZE_MAX/2) return;
+    while (n < count*2) { if (n > SIZE_MAX/2) return; n*=2; }
+    if (n > SIZE_MAX/sizeof *native_functions) return;
+    struct rt_fn *table=calloc(n,sizeof *table);
+    if (!table) return; /* allocation failure retains the sorted-table lookup */
+    for (unsigned i=0;i<rt_fntab_n;i++) {
+        size_t k=native_hash(rt_fntab[i].addr)&(n-1);
+        while (table[k].fn) k=(k+1)&(n-1);
+        table[k]=rt_fntab[i];
+    }
+    native_mask=n-1; native_functions=table;
+}
+#endif
+
 GuestFn rt_lookup(uint32_t addr)
 {
 #ifdef DS2_BROKEN_WORLD
@@ -126,6 +159,16 @@ GuestFn rt_lookup(uint32_t addr)
     extern GuestFn rt_bw_lookup(uint32_t);
     GuestFn cached = rt_bw_lookup(addr);
     if (cached) return cached;
+#endif
+#ifndef DS2_BROKEN_WORLD
+    if (native_functions) {
+        size_t k=native_hash(addr)&native_mask;
+        while (native_functions[k].fn) {
+            if (native_functions[k].addr==addr) return native_functions[k].fn;
+            k=(k+1)&native_mask;
+        }
+        return NULL;
+    }
 #endif
     unsigned lo = 0, hi = rt_fntab_n;
     while (lo < hi) {
@@ -140,6 +183,9 @@ static struct rt_fn *bw_functions;
 static uint32_t bw_mask;
 __attribute__((constructor)) static void bw_prepare_functions(void)
 {
+#ifdef RT_SPLIT
+    if (!&rt_fntab_n) return;                    /* no game yet: the setup window runs instead */
+#endif
     uint32_t n = 1;
     while (n < rt_fntab_n * 2u) n <<= 1;
     bw_functions = calloc(n, sizeof *bw_functions);
@@ -232,7 +278,9 @@ uint64_t rt_rdtsc(void)
 }
 
 /* ---- x87 helpers ---- */
+#ifndef RT_SPLIT                                /* a split build defines it beside the game code (setup/game_tls.c): lld can't bind a thread-local across the split */
 __thread uint32_t rt_host_rc = UINT32_MAX;                  /* the x87 rounding control this thread's FPCR is set to (rt_fpcr_sync) */
+#endif
 /* the x87 transcendentals through the system maths library, which assumes round-to-nearest: this thread's rounding
  * mode is set to nearest around the call (the empty asm statements tie the call to the switches, so the compiler can't
  * move it across them) */

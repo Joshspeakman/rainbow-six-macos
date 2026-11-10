@@ -61,7 +61,7 @@ static void set_gain(Buf *b)
 }
 static inline float sample(Buf *b, uint32_t frame, int chn)
 {
-    uint32_t at = (frame % (b->size / b->align)) * b->align + (b->ch == 2 ? chn : 0) * (b->bits / 8);
+    uint32_t at = frame * b->align + (b->ch == 2 ? chn : 0) * (b->bits / 8);
     return b->bits == 16 ? (int16_t)rt_r16(G_MEM, b->mem + at) / 32768.0f : ((int)G_MEM[b->mem + at] - 128) / 128.0f;
 }
 void w32_audio_out(const float *lr, uint32_t frames, int rate, int source);         /* winmm.c: mute, level log, dump */
@@ -83,6 +83,9 @@ static void render(void *u, void *buffer, uint32_t frames)
         for (uint32_t i = 0; i < frames; i++) {
             uint32_t p0 = pos, p1 = pos + 1; float t = (float)fr;
             if (!b->looping && p1 >= nframes) p1 = p0;
+            /* Wrap each interpolation endpoint once, shared by both channels. */
+            if (p0 >= nframes) p0 %= nframes;
+            if (p1 >= nframes) p1 %= nframes;
             float l = sample(b, p0, 0) * (1 - t) + sample(b, p1, 0) * t, r = sample(b, p0, 1) * (1 - t) + sample(b, p1, 1) * t;
             if (b->dump) { int16_t v[2] = {(int16_t)(l * 32767), (int16_t)(r * 32767)}; fwrite(v, 4, 1, b->dump); }
             out[2 * i] += (float)(l * gl); out[2 * i + 1] += (float)(r * gr);

@@ -1,0 +1,62 @@
+{
+  "name": "Rainbow Six",
+  "folder": "Rainbow Six",
+  "bundle_id": "io.github.joshspeakman.rainbow-six",
+  "release_repo": "Joshspeakman/rainbow-six-macos",
+  "binary": "Rainbow Six",
+  "icon_label": "R6",
+  "version": "1.04",
+  "where": "Your Rainbow Six folder (GOG, version 1.04)",
+  "minutes": 4,
+  "space_gb": 4,
+  "exe": "RainbowSix.exe",
+  "exe_sha256": {
+    "556ed69b7029d58852458afe1a11ce3aa95a3cf16d2bca43e5f322c6c8aec8a4": "GOG 1.04"
+  },
+  "required": [
+    "SMACKW32.DLL",
+    "data",
+    "MUSIC"
+  ],
+  "libs": [
+    {
+      "file": "SMACKW32.DLL"
+    }
+  ],
+  "tag_lowercase": true,
+  "lift_args": [
+    "--game",
+    "r6"
+  ],
+  "cc_args": [
+    "-fPIC",
+    "-DRT_HOST_RC_INIT=UINT32_MAX"
+  ],
+  "log": "RainbowSix",
+  "local_network": "Rainbow Six hosts and joins multiplayer games on your local network.",
+  "build": "./build_r6.sh \"$GAME\" && ./tools/build_app.sh \"$PWD/work/r6\"",
+  "out": "work/r6",
+  "rt_opt": "-O1 -ffp-contract=off",
+  "frameworks": [
+    "AppKit",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "GameController",
+    "CoreImage"
+  ],
+  "host_cflags": [
+    "-DDF_EDITION",
+    "-DR6_EDITION"
+  ],
+  "rt_cflags": [
+    "-DDF_EDITION",
+    "-DR6_EDITION"
+  ],
+  "style": "tactical",
+  "title": "RAINBOW SIX",
+  "art_url": "https://images-2.gog-statics.com/64f4ce14baeaec1e04406ebf5e7238106219799f580cda3c9313ab32eec60821.jpg"
+}

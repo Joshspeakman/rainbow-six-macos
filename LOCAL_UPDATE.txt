@@ -1,0 +1,13 @@
+Local macOS runtime update — 12 October 2026
+
+Port the applicable shared-runtime changes from the Linux native-port review:
+heap boundary/overflow/slot reuse, concurrent overlay paths, thread resource
+lifetime, graphics-interface cleanup, faster audio sampling and message removal.
+Use a checked immutable dispatch table and free VM gaps where not already present.
+Preserve the existing native Metal renderer, CoreAudio, edition handling and
+Apple Silicon memory-protection behavior. DirectPlay 8 fragmentation, DirectDraw
+conversion and Vulkan guest ownership/cache fixes apply where modules exist.
+
+Validation: recomp/tests/runtime_regressions_macos.py runs portable synthetic
+regressions with AddressSanitizer and UndefinedBehaviorSanitizer. Guest process
+memory intentionally lives to exit. These checks do not establish gameplay FPS.
