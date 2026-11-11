@@ -398,7 +398,9 @@ static NSString *update_check(NSString *updater)   /* the newest commit of the b
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), dispatch_get_global_queue(0, 0), ^{ if (t.running) [t terminate]; });
     NSData *d = [p.fileHandleForReading readDataToEndOfFile]; [t waitUntilExit];
     NSString *out = [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    return t.terminationStatus == 0 && out.length >= 40 ? [out substringToIndex:40] : nil;
+    if (t.terminationStatus != 0 || !out.length) return nil;
+    if (out.length >= 40) return [out substringToIndex:40];   /* a commit (an app built from source) */
+    return [out rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location == NSNotFound ? out : nil;   /* a release's tag (the downloaded app) */
 }
 static NSArray<NSDictionary *> *update_choice(int state, NSString *branch, NSString *built, NSString *latest)
 {
@@ -414,6 +416,12 @@ static NSArray<NSDictionary *> *update_choice(int state, NSString *branch, NSStr
 /* the phase of install.sh's output, in words */
 static NSString *update_phase(NSString *line, NSString *branch)
 {
+    if ([branch isEqualToString:@"release"]) {   /* the downloaded app's updater (setup/update.sh) */
+        if ([line hasPrefix:@"== downloading "]) return [NSString stringWithFormat:@"Downloading %@ from GitHub", [line substringFromIndex:15]];
+        if ([line hasPrefix:@"== unpacking"]) return @"Unpacking it";
+        if ([line hasPrefix:@"== installing"]) return @"Installing the new app";
+        return nil;
+    }
     if ([line hasPrefix:@"== fetching"]) return @"Downloading the update from GitHub";
     if ([line hasPrefix:[NSString stringWithFormat:@"== %@:", branch]]) return [@"Got " stringByAppendingString:[line substringFromIndex:branch.length + 4]];
     if ([line hasPrefix:@"== analysis"]) return @"Rebuilding from your game: analysing its code (1 of 4)";
@@ -526,7 +534,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         if (ustate != UPD_AVAILABLE) { check(); return; }
         NSAlert *a = [NSAlert new];
         a.messageText = [NSString stringWithFormat:@"Update to the newest %@?", [branch isEqualToString:@"nightly"] ? @"Nightly" : @"version"];
-        a.informativeText = [NSString stringWithFormat:@"The %@ branch (%@) is downloaded from GitHub and the app is rebuilt from your own copy of the game, "
+        a.informativeText = [branch isEqualToString:@"release"] ? [NSString stringWithFormat:@"%@ is downloaded from GitHub and replaces this app. Your game, saves and settings are kept; if the game's code changed, it is rebuilt from your copy when the app starts again.", latest] : [NSString stringWithFormat:@"The %@ branch (%@) is downloaded from GitHub and the app is rebuilt from your own copy of the game, "
                              "which takes a few minutes. Your game folder, saves and settings are kept. The app restarts when it is done.", branch, short_commit(latest)];
         [a addButtonWithTitle:@"Update"]; [a addButtonWithTitle:@"Cancel"];
         if ([a runModal] != NSAlertFirstButtonReturn) return;
