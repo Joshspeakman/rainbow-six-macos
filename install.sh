@@ -92,7 +92,7 @@ cat > "$A/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>io.github.rainbow-six-macos.$ID</string>
+  <key>CFBundleIdentifier</key><string>io.github.joshspeakman.$ID</string>
   <key>CFBundleExecutable</key><string>launcher</string>
   <key>CFBundleIconFile</key><string>icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
