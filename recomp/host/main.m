@@ -349,7 +349,7 @@ static int raw_moving(void)
 }
 static void raw_hook(GCMouse *m)
 {
-    if ([m.vendorName rangeOfString:@"Trackpad" options:NSCaseInsensitiveSearch].location != NSNotFound) return;
+    if (m.vendorName && [m.vendorName rangeOfString:@"Trackpad" options:NSCaseInsensitiveSearch].location != NSNotFound) return; /* a nil name makes rangeOfString: return location 0, not NSNotFound */
     m.mouseInput.mouseMovedHandler = ^(GCMouseInput *mi, float dx, float dy) {   /* on the main queue, as the pointer's events */
         (void)mi;
         if (!captured || !win) return;
