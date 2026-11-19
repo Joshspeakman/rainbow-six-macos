@@ -383,3 +383,9 @@ This repository contains no part of the game. You need your own legally obtained
 from it is for your own use only. Third-party code and credits are listed in [NOTICE.md](NOTICE.md).
 
 The code in this repository is released under the [MIT License](LICENSE).
+
+## Support
+
+If you get some use out of this, you can buy me a coffee on Ko-fi.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/speakerjosh)
