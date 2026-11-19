@@ -1,13 +1,14 @@
 #!/bin/bash
 # make_release.sh <game folder> <version tag>: builds the drag-and-drop app and disk image for a public release.
+# GAME_JSON=<file> builds from another game's settings than setup/game.json (a repository with two games: Delta Force).
 #
 # The app holds our runtime and launcher, compiled here against Apple's SDK; the compiler and Python that build the game on
 # the player's Mac; and address lists saying where the functions are in each exact game file. It holds no game code or data:
 # check_release.py fails the release otherwise. The game piece is a separate library the executable links weakly, so the app
 # runs before the game exists and binds it once setup has built it (setup_ui.m restarts itself with the library path set).
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"; S="$HERE/setup"; GAME="$(cd "${1:?usage: make_release.sh <game folder> <tag>}" && pwd)"; TAG="${2:?tag}"
-j() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); v=v.get(sys.argv[2],sys.argv[3] if len(sys.argv)>3 else ""); print(" ".join(map(str,v)) if isinstance(v,list) else v)' "$S/game.json" "$@"; }
+HERE="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"; S="$HERE/setup"; GJ="$(cd "$(dirname "${GAME_JSON:-$S/game.json}")" && pwd)/$(basename "${GAME_JSON:-$S/game.json}")"; GAME="$(cd "${1:?usage: make_release.sh <game folder> <tag>}" && pwd)"; TAG="${2:?tag}"
+j() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); v=v.get(sys.argv[2],sys.argv[3] if len(sys.argv)>3 else ""); print(" ".join(map(str,v)) if isinstance(v,list) else v)' "$GJ" "$@"; }
 NAME="$(j name)"; BIN="$(j binary)"; SLUG="${NAME// /-}"; OUTREL="$(j out work/full)"
 REPO_NAME="$(basename "$ROOT")"; B="$HOME/ProjectBuilds/$REPO_NAME"; REL="$B/release"; mkdir -p "$REL" "$B/recomp/work"
 [ -e "$HERE/work" ] || { ln -s "$B/recomp/work" "$HERE/work"; C="$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)"; grep -qxF recomp/work "$C/info/exclude" || echo recomp/work >> "$C/info/exclude"; }
@@ -39,7 +40,7 @@ R="$A/Contents/Resources/setup"; mkdir -p "$R/tools" "$R/runtime" "$R/lists"
 cp "$S/setup.py" "$S/game_tls.c" "$R/"; cp -R "$S/include" "$R/include"; cp "$HERE"/tools/*.py "$R/tools/"; cp "$HERE"/runtime/rt*.h "$R/runtime/"; cp "$TK" "$R/toolkit.tar.xz"
 H="$(j art_helper)"; if [ -n "$H" ]; then mkdir -p "$R/bin"; clang -O2 -fobjc-arc -framework AppKit -framework CoreImage "$HERE/tools/$H" -o "$R/bin/$(basename "$H" .m)"; fi   # an art step's compiled half (the player's Mac has no SDK)
 CODE="$(cat "$HERE"/tools/*.py "$HERE"/runtime/rt*.h "$S"/include/* "$S/game_tls.c" | shasum -a 256 | cut -d' ' -f1)"
-python3 - "$S/game.json" "$R/game.json" "$CODE" "$TAG" <<'PY'
+python3 - "$GJ" "$R/game.json" "$CODE" "$TAG" <<'PY'
 import json, sys
 c = json.load(open(sys.argv[1])); c["code"] = sys.argv[3]; c["release"] = sys.argv[4]
 for k in ("build", "out", "rt_cflags", "rt_opt", "host_cflags", "frameworks", "link_flags", "binary", "icon_label", "local_network", "release_repo", "bundle_id"): c.pop(k, None)
@@ -69,7 +70,7 @@ cat > "$A/Contents/Info.plist" <<PLIST
     <key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>public.folder</string></array></dict></array>
 </dict></plist>
 PLIST
-python3 "$S/check_release.py" "$A" "$GAME" "$S/game.json"
+python3 "$S/check_release.py" "$A" "$GAME" "$GJ"
 codesign --force --deep -s - "$A"; codesign -v "$A"
 echo "== packaging"
 "$HERE/.venv/bin/python" -c 'import dmgbuild' 2>/dev/null || "$HERE/.venv/bin/python" -m pip install -q dmgbuild   # (python -m pip: a moved clone's pip script points at the old place)
