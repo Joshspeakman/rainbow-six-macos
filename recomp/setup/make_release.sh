@@ -21,21 +21,23 @@ for f in "$HERE"/host/*.m; do o="$OUT/obj/host/$(basename "$f" .m).o"   # SKIP_F
   if [ -e "$o" ] && [ "$f" -nt "$o" ]; then echo "make_release: host/$(basename "$f") changed since the last full build: run without SKIP_FULL_BUILD" >&2; exit 1; fi; done
 echo "== the runtime, split from the game"
 clang -c $(j rt_opt -O1) -g -Wall -Wno-unused-function -fno-strict-aliasing -DRT_SPLIT $(j rt_cflags) -I "$HERE/runtime" -I "$HERE/runtime/win32" -o "$OUT/obj/rt/rt.o" "$HERE/runtime/rt.c"
-clang -c -O2 -fobjc-arc -Wall -Wno-unused-function -DDS_EASY_INSTALL $(j host_cflags) -I "$HERE/runtime" -DDS_BUILD="\"$TAG\"" -o "$OUT/obj/host/main.o" "$HERE/host/main.m"
+HM="$(j host_main host/main.m)"; HI=(); for d in $(j host_includes); do HI+=(-I "$HERE/$d"); done   # the host's main file (The Sims: host/sims_mac.m)
+clang -c -O2 -fobjc-arc -Wall -Wno-unused-function -DDS_EASY_INSTALL $(j host_cflags) -I "$HERE/runtime" ${HI[@]+"${HI[@]}"} -DDS_BUILD="\"$TAG\"" -o "$OUT/obj/host/$(basename "$HM" .m).o" "$HERE/$HM"
+XD=(); for d in $(j extra_obj_dirs); do XD+=("$OUT/$d"); done                                                 # more of the app's own objects (The Sims: obj/spirv-cross)
 clang -c -O2 -fobjc-arc -Wall -o "$OUT/obj/host/setup_ui.o" "$S/setup_ui.m"
 cat > "$O/stub.c" <<'STUB'
 #include <stdint.h>
 const char rt_fntab[1], rt_images[1], rt_imptab[1]; const unsigned rt_fntab_n, rt_images_n, rt_imptab_n; __thread uint32_t rt_host_rc;
 STUB
-comm -12 <(find "$OUT/obj/rt" "$OUT/obj/host" -name '*.o' -exec nm -u {} + | awk '/^_/{print $1}' | sort -u) <(nm -gU "$OUT"/obj/*.o 2>/dev/null | awk 'NF==3{print $3}' | sort -u) > "$O/from_game.txt"   # what the runtime takes from the game code
+comm -12 <(find "$OUT/obj/rt" "$OUT/obj/host" ${XD[@]+"${XD[@]}"} -name '*.o' -exec nm -u {} + | awk '/^_/{print $1}' | sort -u) <(nm -gU "$OUT"/obj/*.o 2>/dev/null | awk 'NF==3{print $3}' | sort -u) > "$O/from_game.txt"   # what the runtime takes from the game code
 { grep '^_f_' "$O/from_game.txt" || true; } | sed -E 's/^_(.*)$/void \1(void) {}/' >> "$O/stub.c"   # game functions it calls directly
 { grep -v '^_f_' "$O/from_game.txt" || true; } | sed -E 's/^_//' | { grep -vxE 'rt_fntab|rt_images|rt_imptab|rt_fntab_n|rt_images_n|rt_imptab_n|rt_host_rc' || true; } | sed -E 's/^(.*)$/const char \1[1];/' >> "$O/stub.c"   # and its other tables (Delta Force: rt_blocks)
 clang -dynamiclib -arch arm64 -install_name @rpath/libgame.dylib -o "$O/libgame.dylib" "$O/stub.c"
 FW=(); for f in $(j frameworks); do FW+=(-framework "$f"); done
-find "$OUT/obj/rt" "$OUT/obj/host" -name '*.o' > "$O/objs.txt"
+find "$OUT/obj/rt" "$OUT/obj/host" ${XD[@]+"${XD[@]}"} -name '*.o' > "$O/objs.txt"
 A="$REL/$NAME.app"; rm -rf "${A:?}"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources/setup"
 clang -o "$A/Contents/MacOS/$BIN" -filelist "$O/objs.txt" -Wl,-weak_library,"$O/libgame.dylib" -Wl,-export_dynamic -Wl,-rpath,@executable_path/../Frameworks "${FW[@]}" -lz $(j link_flags)
-cp "$OUT/app/shaders.metal" "$OUT/app/dsr_snapshot.bin" "$A/Contents/MacOS/"
+for f in $(j app_files "shaders.metal dsr_snapshot.bin"); do cp "$OUT/app/$f" "$A/Contents/MacOS/"; done   # what the app reads beside its executable
 sed -e "s|@REPO@|$(j release_repo)|; s|@ASSET@|$SLUG.zip|" "$S/update.sh" > "$A/Contents/MacOS/update"; chmod +x "$A/Contents/MacOS/update"
 echo "== setup files"
 R="$A/Contents/Resources/setup"; mkdir -p "$R/tools" "$R/runtime" "$R/lists"

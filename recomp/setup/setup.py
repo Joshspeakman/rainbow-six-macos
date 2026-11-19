@@ -297,8 +297,12 @@ class Run:
                     self.tool(step, game, src)
                     exe = os.path.join(self.setup, "bin", os.path.splitext(os.path.basename(helper))[0])
                     subprocess.run([exe, src, os.path.join(self.root, "art")], capture_output=True, timeout=120)
-                elif isinstance(step, list):    # ["script.py", "{art}", ...]: {game} and {art} filled in
-                    self.tool(step[0], *[a.replace("{game}", game).replace("{art}", os.path.join(self.root, "art")) for a in step[1:]])
+                elif isinstance(step, list):    # ["script.py", "{art}", ...], or a list of those: {game} and {art} filled in
+                    for one in (step if isinstance(step[0], list) else [step]):
+                        try:
+                            self.tool(one[0], *[a.replace("{game}", game).replace("{art}", os.path.join(self.root, "art")) for a in one[1:]])
+                        except (Stop, OSError, subprocess.SubprocessError):
+                            pass                    # one picture missing leaves the others
                 else:
                     self.tool(step, game, os.path.join(self.root, "art"))
             except (Stop, OSError, subprocess.SubprocessError):
