@@ -108,6 +108,22 @@ def copy_game(src, dest, bar):
     bar.at(1)
 
 
+def merge_addons(src, dest, cfg):
+    """game.json "addons": pieces the game folder may lack that sit beside it instead (Ghost Recon's expansions, downloaded
+    on a Mac as separate Steam depots): each one found is copied in. Missing ones are fine; the launch window says how."""
+    for add in cfg.get("addons", []):
+        if find_ci(dest, add["into"]):
+            continue
+        for rel in add.get("look", []):
+            there = os.path.normpath(os.path.join(src, rel))
+            if os.path.isdir(there):
+                into = os.path.join(dest, add["into"])
+                os.makedirs(os.path.dirname(into), exist_ok=True)
+                if subprocess.run(["/bin/cp", "-cR", there, into], capture_output=True).returncode != 0:
+                    subprocess.run(["/bin/cp", "-R", there, into], capture_output=True)
+                break
+
+
 def patches(cfg, original):
     """The steps run on the copied executable: game.json's exe_patch, then the accepted version's own ("patch")."""
     v = cfg["exe_sha256"].get(sha256(original))
@@ -356,6 +372,7 @@ def main():
     if src:
         if os.path.realpath(src) != os.path.realpath(dest):
             copy_game(src, dest, bar)
+            merge_addons(src, dest, cfg)
     else:
         check_game(dest, cfg)
     bar.finish()
