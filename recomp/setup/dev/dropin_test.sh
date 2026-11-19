@@ -1,7 +1,7 @@
 #!/bin/bash
 # dev/dropin_test.sh <app> <root under ~/Games> <tag>: development check of a built release app. Search -> Set Up on a fresh root, stop at ready.json, then boot the setup-built game in test mode
 A="$1"; R="$HOME/Games/$2"; T="${DROPIN_OUT:-$HOME/Scratch}/dropin-$3"; mkdir -p "$T"
-BIN="$A/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$A/Contents/Info.plist")"
+BIN="$A/Contents/MacOS/${DROPIN_BIN:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$A/Contents/Info.plist")}"   # DROPIN_BIN: one game of a suite (GTA3)
 [ -e "$R" ] && { echo "root exists already: $R"; exit 1; }
 DS_SETUP_SHOTS="$T" DS_SETUP_SEARCH=1 DS_SETUP_SEARCHLOG=1 DS_SETUP_PRESS=1 "$BIN" > "$T/setup.txt" 2>&1 & P=$!; start=$(date +%s)
 while kill -0 $P 2>/dev/null; do
