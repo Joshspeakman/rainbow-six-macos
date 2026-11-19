@@ -37,6 +37,7 @@ sed -e "s|@REPO@|$(j release_repo)|; s|@ASSET@|$SLUG.zip|" "$S/update.sh" > "$A/
 echo "== setup files"
 R="$A/Contents/Resources/setup"; mkdir -p "$R/tools" "$R/runtime" "$R/lists"
 cp "$S/setup.py" "$S/game_tls.c" "$R/"; cp -R "$S/include" "$R/include"; cp "$HERE"/tools/*.py "$R/tools/"; cp "$HERE"/runtime/rt*.h "$R/runtime/"; cp "$TK" "$R/toolkit.tar.xz"
+H="$(j art_helper)"; if [ -n "$H" ]; then mkdir -p "$R/bin"; clang -O2 -fobjc-arc -framework AppKit -framework CoreImage "$HERE/tools/$H" -o "$R/bin/$(basename "$H" .m)"; fi   # an art step's compiled half (the player's Mac has no SDK)
 CODE="$(cat "$HERE"/tools/*.py "$HERE"/runtime/rt*.h "$S"/include/* "$S/game_tls.c" | shasum -a 256 | cut -d' ' -f1)"
 python3 - "$S/game.json" "$R/game.json" "$CODE" "$TAG" <<'PY'
 import json, sys

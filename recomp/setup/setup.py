@@ -114,8 +114,21 @@ def patches(cfg, original):
     return list(cfg.get("exe_patch", [])) + (list(v.get("patch", [])) if isinstance(v, dict) else [])
 
 
+def folder_gb(path):
+    total = 0
+    for here, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(here, f)).st_size
+            except OSError:
+                pass
+    return total / (1 << 30)
+
+
 def tag_of(name, cfg):
-    tag = os.path.basename(name).replace(".", "_")
+    """A DLL's tag (its generated files' and functions' prefix): the file name with every character a C name can't hold
+    as "_" (zlib-1.1.3.dll -> zlib_1_1_3_dll)."""
+    tag = "".join(ch if ch.isalnum() else "_" for ch in os.path.basename(name))
     return tag.lower() if cfg.get("tag_lowercase") else tag
 
 
@@ -276,11 +289,17 @@ class Run:
     def art(self, game, bar):
         """The launch window's art, read from the player's own files. A plain title is fine if this can't be done."""
         bar.stage("art", "Finishing up")
-        step = self.cfg.get("art")
+        step, helper = self.cfg.get("art"), self.cfg.get("art_helper")
         if step:
             try:
-                self.tool(step, game, os.path.join(self.root, "art"))
-            except Stop:
+                if helper:      # the script gathers the pictures, the app's compiled helper (bin/) composes them
+                    src = os.path.join(self.work, "art-src")
+                    self.tool(step, game, src)
+                    exe = os.path.join(self.setup, "bin", os.path.splitext(os.path.basename(helper))[0])
+                    subprocess.run([exe, src, os.path.join(self.root, "art")], capture_output=True, timeout=120)
+                else:
+                    self.tool(step, game, os.path.join(self.root, "art"))
+            except (Stop, OSError, subprocess.SubprocessError):
                 pass
         url = self.cfg.get("art_url")
         banner = os.path.join(self.root, "art", "banner.jpg")
@@ -311,15 +330,24 @@ def main():
     bar = Bar()
     dest = os.path.join(a.root, "game-files")
     os.makedirs(a.root, exist_ok=True)
-    free_gb = shutil.disk_usage(a.root).free / (1 << 30)
-    if free_gb < cfg.get("space_gb", 4):
-        raise Stop(f"Setup needs about {cfg['space_gb']} GB free on your Mac. There's {free_gb:.1f} GB.")
     bar.stage("copy", "Bringing in the game files")
+    src = None
     if a.game:
         src = locate_game(a.game, cfg)
         if not src:
             raise Stop(f"That folder doesn't have {cfg['exe']} in it.")
         check_game(src, cfg)
+    # the space setup takes: the build's, plus the game's when it comes from another disk (on the same disk the copy is an
+    # APFS clone, which takes almost none). game.json's space_gb is the total for a copy from elsewhere.
+    free_gb = shutil.disk_usage(a.root).free / (1 << 30)
+    need = cfg.get("space_gb", 4)
+    if not src or os.path.realpath(src) == os.path.realpath(dest):
+        need = cfg.get("build_gb", 2)                                       # already in place
+    elif os.stat(src).st_dev == os.stat(a.root).st_dev:
+        need = cfg.get("build_gb", max(2, need - folder_gb(src)))           # cloned
+    if free_gb < need:
+        raise Stop(f"Setup needs about {need:.0f} GB free on your Mac. There's {free_gb:.1f} GB.")
+    if src:
         if os.path.realpath(src) != os.path.realpath(dest):
             copy_game(src, dest, bar)
     else:

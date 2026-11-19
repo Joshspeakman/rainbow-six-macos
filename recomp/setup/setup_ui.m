@@ -238,7 +238,7 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
     NSDictionary *_cfg; NSString *_root, *_inbox, *_found, *_declined;
     NSWindow *_win; NSTextField *_title, *_body, *_note; DropZone *_zone; ThemeBar *_bar;
     ThemeButton *_primary, *_secondary, *_tertiary, *_fourth; ThStyle _st; ArtView *_art; NSTask *_task; NSTimer *_scan; BOOL _busy, _updating, _cancelled;
-    NSDate *_began; void (^_onPrimary)(void), (^_onSecondary)(void), (^_onTertiary)(void), (^_onFourth)(void); volatile BOOL _stopSearch;
+    NSDate *_began; void (^_onPrimary)(void), (^_onSecondary)(void), (^_onTertiary)(void), (^_onFourth)(void); volatile BOOL _stopSearch; BOOL _fromSearch;
 }
 - (NSTextField *)label:(NSRect)r font:(NSFont *)f color:(NSColor *)c
 {
@@ -345,6 +345,7 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
                                       : [NSString stringWithFormat:@"Couldn't find %@ on this Mac. Drop its folder here, or Choose... it.", _cfg[@"name"]]];
         return;
     }
+    _fromSearch = YES;                                   /* found where it lives (a Steam library, another app): never offered to the Trash */
     if (good.count == 1) { [self showFound:good[0][@"path"]]; return; }
     NSAlert *a = [NSAlert new]; a.messageText = [NSString stringWithFormat:@"Found %lu copies of %@", (unsigned long)good.count, _cfg[@"name"]];
     a.informativeText = @"Which one should the app use?";
@@ -358,6 +359,7 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
 - (void)tryPath:(NSString *)path
 {
     if (_busy) return;
+    _fromSearch = NO;
     BOOL dir = NO;
     if (![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&dir]) return;
     if (!dir) path = path.stringByDeletingLastPathComponent;
@@ -489,7 +491,7 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
 {
     NSDictionary *cfg = _cfg; NSFileManager *fm = NSFileManager.defaultManager;
     if (game.length && [game hasPrefix:inbox]) { for (NSString *n in [fm contentsOfDirectoryAtPath:inbox error:nil]) [fm removeItemAtPath:[inbox stringByAppendingPathComponent:n] error:nil]; restart_app(cfg); return; }
-    if (!game.length) { restart_app(cfg); return; }
+    if (!game.length || _fromSearch) { restart_app(cfg); return; }
     _busy = YES; _bar.hidden = YES; _title.stringValue = @"All Set";
     _body.stringValue = @"The app has its own copy of the game now.\nWould you like to remove the folder you dropped, to save space?"; _note.stringValue = game; _note.textColor = th_dim(_st);
     [self button:_fourth title:nil]; [self button:_primary title:@"Keep It and Play"]; _onPrimary = ^{ restart_app(cfg); };
