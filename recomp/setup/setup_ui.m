@@ -40,15 +40,26 @@ static NSString *find_ci(NSString *folder, NSString *relative)
     }
     return here;
 }
+static NSString *config_path;   /* the settings game_config read: setup.py is given the same */
 static NSDictionary *game_config(void)
 {
-    NSString *p = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"setup/game.json"];
-    NSData *d = [NSData dataWithContentsOfFile:p];
+    /* one app with several games (a suite: make_suite.sh) has setup/<binary>.json per game binary; one game, setup/game.json */
+    NSString *dir = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"setup"];
+    NSString *p = [dir stringByAppendingPathComponent:[NSBundle.mainBundle.executablePath.lastPathComponent stringByAppendingPathExtension:@"json"]];
+    if (![NSFileManager.defaultManager fileExistsAtPath:p]) p = [dir stringByAppendingPathComponent:@"game.json"];
+    NSData *d = [NSData dataWithContentsOfFile:p]; config_path = p;
     return d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
 }
 static NSString *game_root(NSDictionary *cfg)
 {
     return [[NSHomeDirectory() stringByAppendingPathComponent:@"Games"] stringByAppendingPathComponent:cfg[@"folder"]];
+}
+/* game.json's "inside": where the game sits in a store's wrapper that `here` may be (the Mac Steam releases of GTA III and
+ * San Andreas: <game>.app/Contents/Resources/transgaming/c_drive/...); the folder holding the executable, or nil */
+static NSString *inside_game(NSString *here, NSDictionary *cfg)
+{
+    for (NSString *rel in cfg[@"inside"]) { NSString *d = find_ci(here, rel); if (d && find_ci(d, cfg[@"exe"])) return d; }
+    return nil;
 }
 /* the folder at or under `path` (3 levels at most) holding the game's executable */
 static NSString *locate_game(NSString *path, NSDictionary *cfg)
@@ -58,6 +69,7 @@ static NSString *locate_game(NSString *path, NSDictionary *cfg)
     while (queue.count) {
         NSString *here = queue[0][0]; int depth = [queue[0][1] intValue]; [queue removeObjectAtIndex:0];
         if (find_ci(here, cfg[@"exe"])) return here;
+        NSString *in = inside_game(here, cfg); if (in) return in;
         if (depth >= 3) continue;
         for (NSString *n in [[fm contentsOfDirectoryAtPath:here error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
             NSString *sub = [here stringByAppendingPathComponent:n]; BOOL dir = NO;
@@ -83,7 +95,9 @@ static NSString *check_game(NSString *folder, NSDictionary *cfg)
 {
     NSString *exe = find_ci(folder, cfg[@"exe"]);
     if (!exe) return [NSString stringWithFormat:@"That folder doesn't have %@ in it.", cfg[@"exe"]];
-    if (!version_of(cfg, sha256_of(exe)))
+    NSString *sha = sha256_of(exe);
+    if (cfg[@"exe_refuse"][sha ?: @""]) return cfg[@"exe_refuse"][sha];   /* a copy this app can't use, with what to do instead */
+    if (!version_of(cfg, sha))
         return [NSString stringWithFormat:@"This isn't the version of %@ this app works with. It needs %@.", cfg[@"name"], cfg[@"version"]];
     for (NSString *r in cfg[@"required"]) if (!find_ci(folder, r))
         return [NSString stringWithFormat:@"That copy of %@ is incomplete: %@ is missing.", cfg[@"name"], r];
@@ -140,6 +154,14 @@ static NSArray<NSDictionary *> *search_game(NSDictionary *cfg, volatile BOOL *st
         }
         if (depth >= 5) continue;
         for (NSString *n in names) {
+            if ([n.pathExtension isEqualToString:@"app"] && [cfg[@"inside"] count]) {   /* a store's wrapper app: only where the game would be */
+                NSString *in = inside_game([here stringByAppendingPathComponent:n], cfg);
+                if (in && ![seen containsObject:in.stringByResolvingSymlinksInPath]) {
+                    [seen addObject:in.stringByResolvingSymlinksInPath]; NSString *problem = check_game(in, cfg);
+                    [found addObject:problem ? @{@"path": in, @"problem": problem} : @{@"path": in, @"version": found_version(in, cfg)}];
+                }
+                continue;
+            }
             if ([n hasPrefix:@"."] || [n.pathExtension isEqualToString:@"app"] || [n isEqualToString:@"Library"] || [n isEqualToString:@"node_modules"]) continue;
             NSString *sub = [here stringByAppendingPathComponent:n]; BOOL dir = NO;
             if ([fm fileExistsAtPath:sub isDirectory:&dir] && dir) [queue addObject:@[sub, @(depth + 1)]];
@@ -156,6 +178,8 @@ static BOOL game_is_built(NSDictionary *cfg)
 }
 static void restart_app(NSDictionary *cfg)
 {
+    const char *suite = getenv("DS_SUITE");   /* started by a suite's launch window: back to it, which now shows the game ready */
+    if (suite && *suite) { char *const sv[] = {(char *)suite, NULL}; unsetenv("DS_SUITE"); unsetenv("DS_SETUP_FOLDER"); execv(suite, sv); }
     NSString *rc = [game_root(cfg) stringByAppendingPathComponent:@"recomp"];
     setenv("DYLD_LIBRARY_PATH", rc.fileSystemRepresentation, 1); setenv("DS_EASY_READY", "1", 1);
     const char *self = NSBundle.mainBundle.executablePath.fileSystemRepresentation;
@@ -448,7 +472,7 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
         }
         NSTask *t = [NSTask new]; NSPipe *pipe = [NSPipe pipe];
         t.executableURL = [NSURL fileURLWithPath:[tools stringByAppendingPathComponent:@"python/bin/python3"]];
-        t.arguments = @[[res stringByAppendingPathComponent:@"setup.py"], @"--game", game ?: @"", @"--root", root, @"--setup", res, @"--tools", tools];
+        t.arguments = @[[res stringByAppendingPathComponent:@"setup.py"], @"--game", game ?: @"", @"--root", root, @"--setup", res, @"--tools", tools, @"--config", config_path ?: [res stringByAppendingPathComponent:@"game.json"]];
         t.environment = @{@"PATH": @"/usr/bin:/bin", @"HOME": NSHomeDirectory(), @"LANG": @"en_US.UTF-8"};
         t.standardOutput = pipe; t.standardError = [NSFileHandle fileHandleForWritingAtPath:@"/dev/null"];
         self->_task = t;
@@ -492,6 +516,7 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
     NSDictionary *cfg = _cfg; NSFileManager *fm = NSFileManager.defaultManager;
     if (game.length && [game hasPrefix:inbox]) { for (NSString *n in [fm contentsOfDirectoryAtPath:inbox error:nil]) [fm removeItemAtPath:[inbox stringByAppendingPathComponent:n] error:nil]; restart_app(cfg); return; }
     if (!game.length || _fromSearch) { restart_app(cfg); return; }
+    if ([game.lowercaseString containsString:@"/steamapps/"] || [game containsString:@".app/"]) { restart_app(cfg); return; }   /* a store's own copy: Steam keeps it */
     _busy = YES; _bar.hidden = YES; _title.stringValue = @"All Set";
     _body.stringValue = @"The app has its own copy of the game now.\nWould you like to remove the folder you dropped, to save space?"; _note.stringValue = game; _note.textColor = th_dim(_st);
     [self button:_fourth title:nil]; [self button:_primary title:@"Keep It and Play"]; _onPrimary = ^{ restart_app(cfg); };
@@ -517,7 +542,8 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
     if ([NSFileManager.defaultManager fileExistsAtPath:[installed stringByAppendingPathComponent:_cfg[@"exe"]]]) { _updating = YES; [self runSetup:@""]; return; }   /* the game is here: an update changed its code */
     if (!_found && !_busy) [self showWaiting:nil];
     [self shot:@"waiting"];
-    if (getenv("DS_SETUP_AUTO")) [self tryPath:@(getenv("DS_SETUP_AUTO"))];   /* tests: what a drop does */
+    const char *given = getenv("DS_SETUP_FOLDER") ?: getenv("DS_SETUP_AUTO");  /* a folder a suite's launch window was given (tests: what a drop does) */
+    if (given && *given) [self tryPath:@(given)];
     if (getenv("DS_SETUP_SEARCH")) [self search];                                   /* tests: what Search does */
     _scan = [NSTimer scheduledTimerWithTimeInterval:2 repeats:YES block:^(NSTimer *t) { [self scanInbox]; }];
 }
@@ -540,6 +566,7 @@ int ds_easy_install(const char **exe, const char **game, const char **data)
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *root = game_root(cfg), *rc = [root stringByAppendingPathComponent:@"recomp"];
     if (game_is_built(cfg)) {
+        unsetenv("DS_SUITE"); unsetenv("DS_SETUP_FOLDER");                /* the game is ready: it runs, never back to a suite */
         if (!getenv("DS_EASY_READY")) restart_app(cfg);                   /* binds the game at load: see make_release.sh */
         if (!dlsym(RTLD_DEFAULT, "rt_fntab")) unsetenv("DS_EASY_READY");
         else {

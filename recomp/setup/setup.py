@@ -65,6 +65,15 @@ def find_ci(folder, relative):
     return here
 
 
+def inside_game(here, cfg):
+    """game.json "inside": where the game sits in a store's wrapper app that `here` may be (setup_ui.m inside_game)."""
+    for rel in cfg.get("inside", []):
+        d = find_ci(here, rel)
+        if d and find_ci(d, cfg["exe"]):
+            return d
+    return None
+
+
 def locate_game(folder, cfg):
     """The folder under `folder` (up to 3 levels down) that holds the game's executable."""
     queue = [(folder, 0)]
@@ -72,6 +81,8 @@ def locate_game(folder, cfg):
         here, depth = queue.pop(0)
         if find_ci(here, cfg["exe"]):
             return here
+        if inside_game(here, cfg):
+            return inside_game(here, cfg)
         if depth < 3:
             try:
                 names = sorted(os.listdir(here))
@@ -85,6 +96,8 @@ def check_game(game, cfg):
     exe = find_ci(game, cfg["exe"])
     if not exe:
         raise Stop(f"That folder doesn't have {cfg['exe']} in it.")
+    if sha256(exe) in cfg.get("exe_refuse", {}):
+        raise Stop(cfg["exe_refuse"][sha256(exe)])
     if sha256(exe) not in cfg["exe_sha256"]:
         raise Stop(f"This isn't the version of {cfg['name']} this app works with. It needs {cfg['version']}.")
     missing = [r for r in cfg["required"] if not find_ci(game, r)]
@@ -152,7 +165,7 @@ class Run:
     def __init__(self, a):
         self.setup = a.setup
         self.root = a.root
-        self.cfg = json.load(open(os.path.join(a.setup, "game.json")))
+        self.cfg = json.load(open(a.config or os.path.join(a.setup, "game.json")))
         self.work = os.path.join(a.root, ".setup", "work")
         self.out = os.path.join(self.work, "out")
         self.py = sys.executable
@@ -343,6 +356,7 @@ def main():
     for name in ("game", "root", "setup", "tools"):
         ap.add_argument("--" + name, required=True)
     ap.add_argument("--make-lists")
+    ap.add_argument("--config")                 # the game's settings when not setup/game.json (a suite: setup/<binary>.json)
     a = ap.parse_args()
     run = Run(a)
     if a.make_lists:

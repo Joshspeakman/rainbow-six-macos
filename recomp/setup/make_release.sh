@@ -1,6 +1,8 @@
 #!/bin/bash
 # make_release.sh <game folder> <version tag>: builds the drag-and-drop app and disk image for a public release.
 # GAME_JSON=<file> builds from another game's settings than setup/game.json (a repository with two games: Delta Force).
+# SUITE_APP=<app> adds this game to an app being put together by make_suite.sh (one app, several games: GTA Classics):
+# its binary goes into that app, its settings to setup/<binary>.json, and the app's bundle and packaging are left to it.
 #
 # The app holds our runtime and launcher, compiled here against Apple's SDK; the compiler and Python that build the game on
 # the player's Mac; and address lists saying where the functions are in each exact game file. It holds no game code or data:
@@ -36,16 +38,17 @@ comm -12 <(find "$OUT/obj/rt" "$OUT/obj/host" ${XD[@]+"${XD[@]}"} -name '*.o' -e
 clang -dynamiclib -arch arm64 -install_name @rpath/libgame.dylib -o "$O/libgame.dylib" "$O/stub.c"
 FW=(); for f in $(j frameworks); do FW+=(-framework "$f"); done
 find "$OUT/obj/rt" "$OUT/obj/host" ${XD[@]+"${XD[@]}"} -name '*.o' > "$O/objs.txt"
-A="$REL/$NAME.app"; rm -rf "${A:?}"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources/setup"
+if [ -n "${SUITE_APP:-}" ]; then A="$SUITE_APP"; else A="$REL/$NAME.app"; rm -rf "${A:?}"; fi; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources/setup"
 clang -o "$A/Contents/MacOS/$BIN" -filelist "$O/objs.txt" -Wl,-weak_library,"$O/libgame.dylib" -Wl,-export_dynamic -Wl,-rpath,@executable_path/../Frameworks "${FW[@]}" -lz $(j link_flags)
 for f in $(j app_files "shaders.metal dsr_snapshot.bin"); do cp "$OUT/app/$f" "$A/Contents/MacOS/"; done   # what the app reads beside its executable
-sed -e "s|@REPO@|$(j release_repo)|; s|@ASSET@|$SLUG.zip|" "$S/update.sh" > "$A/Contents/MacOS/update"; chmod +x "$A/Contents/MacOS/update"
+[ -n "${SUITE_APP:-}" ] || { sed -e "s|@REPO@|$(j release_repo)|; s|@ASSET@|$SLUG.zip|" "$S/update.sh" > "$A/Contents/MacOS/update"; chmod +x "$A/Contents/MacOS/update"; }
 echo "== setup files"
 R="$A/Contents/Resources/setup"; mkdir -p "$R/tools" "$R/runtime" "$R/lists"
 cp "$S/setup.py" "$S/game_tls.c" "$R/"; cp -R "$S/include" "$R/include"; cp "$HERE"/tools/*.py "$R/tools/"; cp "$HERE"/runtime/rt*.h "$R/runtime/"; cp "$TK" "$R/toolkit.tar.xz"
 H="$(j art_helper)"; if [ -n "$H" ]; then mkdir -p "$R/bin"; clang -O2 -fobjc-arc -framework AppKit -framework CoreImage "$HERE/tools/$H" -o "$R/bin/$(basename "$H" .m)"; fi   # an art step's compiled half (the player's Mac has no SDK)
 CODE="$(cat "$HERE"/tools/*.py "$HERE"/runtime/rt*.h "$S"/include/* "$S/game_tls.c" | shasum -a 256 | cut -d' ' -f1)"
-python3 - "$GJ" "$R/game.json" "$CODE" "$TAG" <<'PY'
+CFG="$R/game.json"; [ -z "${SUITE_APP:-}" ] || CFG="$R/$BIN.json"   # a suite: one per game binary (setup_ui.m game_config)
+python3 - "$GJ" "$CFG" "$CODE" "$TAG" <<'PY'
 import json, sys
 c = json.load(open(sys.argv[1])); c["code"] = sys.argv[3]; c["release"] = sys.argv[4]
 for k in ("build", "out", "rt_cflags", "rt_opt", "host_cflags", "frameworks", "link_flags", "binary", "icon_label", "local_network", "release_repo", "bundle_id"): c.pop(k, None)
@@ -54,8 +57,9 @@ if os.environ.get("TEST_EXTRA_EXE_SHA"): c["exe_sha256"][os.environ["TEST_EXTRA_
 json.dump(c, open(sys.argv[2], "w"), indent=1)
 PY
 echo "== address lists"
-LT="$(mktemp -d)"; "$HERE/.venv/bin/python" "$S/setup.py" --game "$GAME" --root "$LT" --setup "$R" --tools "$LT" --make-lists "$R/lists" | tail -1 >/dev/null; rm -rf "${LT:?}"
+LT="$(mktemp -d)"; "$HERE/.venv/bin/python" "$S/setup.py" --game "$GAME" --root "$LT" --setup "$R" --tools "$LT" --config "$CFG" --make-lists "$R/lists" | tail -1 >/dev/null; rm -rf "${LT:?}"
 ls "$R/lists" | wc -l | awk '{print "lists:", $1}'
+if [ -n "${SUITE_APP:-}" ]; then python3 "$S/check_release.py" "$A" "$GAME" "$GJ"; exit 0; fi   # make_suite.sh does the rest
 echo "== icon and bundle"
 I="$(mktemp -d)"; clang -fobjc-arc -framework AppKit -framework CoreImage "$S/make_art.m" -I "$S" -o "$I/mk"; "$I/mk" icon "$(j style)" "$(j icon_label)" "$I/i.png"; mkdir "$I/i.iconset"
 for n in 16 32 128 256 512; do sips -z $n $n "$I/i.png" --out "$I/i.iconset/icon_${n}x${n}.png" >/dev/null; sips -z $((n*2)) $((n*2)) "$I/i.png" --out "$I/i.iconset/icon_${n}x${n}@2x.png" >/dev/null; done
