@@ -17,8 +17,9 @@ if [ -L "$HERE/.venv" ] && [ ! -e "$HERE/.venv" ]; then rm -f "${HERE:?}/.venv";
 TK="$HOME/ProjectBuilds/_toolkit/toolkit.tar.xz"; [ -f "$TK" ] || "$S/make_toolkit.sh" "$TK"
 if [ -z "${SKIP_FULL_BUILD:-}" ]; then echo "== full build (for the runtime's objects and to prove this tree builds)"; (cd "$HERE"; GAME="$GAME" bash -c "$(j build)" 2>&1 | tail -2); fi
 OUT="$HERE/$OUTREL"; O="$OUT/obj/easy"; rm -rf "${O:?}"; mkdir -p "$O"
-for f in "$HERE"/host/*.m; do o="$OUT/obj/host/$(basename "$f" .m).o"   # SKIP_FULL_BUILD reuses the host's objects: never stale ones
-  if [ -e "$o" ] && [ "$f" -nt "$o" ]; then echo "make_release: host/$(basename "$f") changed since the last full build: run without SKIP_FULL_BUILD" >&2; exit 1; fi; done
+OLDEST="$(ls -tr "$OUT"/obj/host/*.o 2>/dev/null | head -1)"   # SKIP_FULL_BUILD reuses the host's objects: never stale ones (by any name: gr_launcher.m makes launcher.o)
+if [ -n "${SKIP_FULL_BUILD:-}" ] && [ -n "$OLDEST" ]; then for f in "$HERE"/host/*.m "$HERE"/host/*.mm "$HERE"/host/*.h; do
+  if [ -e "$f" ] && [ "$f" -nt "$OLDEST" ]; then echo "make_release: host/$(basename "$f") changed since the last full build: run without SKIP_FULL_BUILD" >&2; exit 1; fi; done; fi
 echo "== the runtime, split from the game"
 clang -c $(j rt_opt -O1) -g -Wall -Wno-unused-function -fno-strict-aliasing -DRT_SPLIT $(j rt_cflags) -I "$HERE/runtime" -I "$HERE/runtime/win32" -o "$OUT/obj/rt/rt.o" "$HERE/runtime/rt.c"
 HM="$(j host_main host/main.m)"; HI=(); for d in $(j host_includes); do HI+=(-I "$HERE/$d"); done   # the host's main file (The Sims: host/sims_mac.m)
