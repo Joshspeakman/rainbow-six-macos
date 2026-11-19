@@ -7,7 +7,9 @@ Run by the app (host/setup_ui.m) with its bundled Python. Prints one JSON object
              --setup <App/Contents/Resources/setup> --tools <unpacked compiler and Python>
 
 Everything is written under <root>; the game folder that was dropped is only read. An interrupted setup picks up from the
-last finished file. Nothing here touches a store wrapper or copy protection: the games set up this way need none removed.
+last finished file. A store's copy may carry the store's wrapper on its executable (Steam's SteamStub): game.json names,
+per accepted executable, the step that takes it off the copy here, from the player's own files. Nothing else touches copy
+protection.
 """
 import argparse, concurrent.futures, hashlib, json, os, shutil, signal, subprocess, sys, threading, time
 
@@ -106,6 +108,12 @@ def copy_game(src, dest, bar):
     bar.at(1)
 
 
+def patches(cfg, original):
+    """The steps run on the copied executable: game.json's exe_patch, then the accepted version's own ("patch")."""
+    v = cfg["exe_sha256"].get(sha256(original))
+    return list(cfg.get("exe_patch", [])) + (list(v.get("patch", [])) if isinstance(v, dict) else [])
+
+
 def tag_of(name, cfg):
     tag = os.path.basename(name).replace(".", "_")
     return tag.lower() if cfg.get("tag_lowercase") else tag
@@ -128,6 +136,13 @@ class Run:
         if r.returncode != 0:
             raise Stop(f"Setup failed in {script}: " + (r.stderr or r.stdout).strip()[-300:])
         return r.stdout
+
+    def patch(self, step, exe):
+        """One step on the copied executable: "script.py" (given the file), or ["script.py", "{exe}", ...]."""
+        if isinstance(step, str):
+            self.tool(step, exe)
+        else:
+            self.tool(step[0], *[a.replace("{exe}", exe) for a in step[1:]])
 
     def analysis(self, path, out):
         """The shipped list of function addresses for exactly this file, or the slower analysis if there is none."""
@@ -160,8 +175,8 @@ class Run:
         exe = os.path.join(self.work, self.cfg["exe"])
         shutil.copyfile(find_ci(game, self.cfg["exe"]), exe)
         os.chmod(exe, 0o644)
-        for script in self.cfg.get("exe_patch", []):
-            self.tool(script, exe)
+        for step in patches(self.cfg, find_ci(game, self.cfg["exe"])):
+            self.patch(step, exe)
         for it in self.items(game, exe):
             out = os.path.join(dest, sha256(it["path"]) + ".json")
             self.tool("analyze.py", it["path"], out)
@@ -185,8 +200,8 @@ class Run:
         exe = os.path.join(self.work, cfg["exe"])
         shutil.copyfile(find_ci(game, cfg["exe"]), exe)
         os.chmod(exe, 0o644)
-        for script in cfg.get("exe_patch", []):
-            self.tool(script, exe)
+        for step in patches(cfg, find_ci(game, cfg["exe"])):
+            self.patch(step, exe)
         bar.stage("analyse", "Reading the game's code")
         items = self.items(game, exe)
         for n, it in enumerate(items):
