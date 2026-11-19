@@ -550,7 +550,7 @@ int ds_easy_install(const char **exe, const char **game, const char **data)
             setenv("DS_LOG_FILE", log.fileSystemRepresentation, 1);
             NSString *upd = [NSBundle.mainBundle.executablePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"update"];
             if ([fm isExecutableFileAtPath:upd]) { setenv("DS_UPDATER", upd.fileSystemRepresentation, 1); setenv("DS_UPDATE_BRANCH", "release", 1); setenv("DS_BUILT_COMMIT", [cfg[@"release"] ?: @"" UTF8String], 1); }
-            *exe = strdup([rc stringByAppendingPathComponent:cfg[@"exe"]].fileSystemRepresentation);
+            *exe = strdup([rc stringByAppendingPathComponent:[cfg[@"exe"] lastPathComponent]].fileSystemRepresentation);
             *game = strdup([root stringByAppendingPathComponent:@"game-files"].fileSystemRepresentation);
             *data = strdup(root.fileSystemRepresentation);
             return 1;

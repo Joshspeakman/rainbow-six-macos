@@ -185,7 +185,7 @@ class Run:
         shutil.rmtree(self.work, ignore_errors=True)
         os.makedirs(self.out)
         os.makedirs(dest, exist_ok=True)
-        exe = os.path.join(self.work, self.cfg["exe"])
+        exe = os.path.join(self.work, os.path.basename(self.cfg["exe"]))
         shutil.copyfile(find_ci(game, self.cfg["exe"]), exe)
         os.chmod(exe, 0o644)
         for step in patches(self.cfg, find_ci(game, self.cfg["exe"])):
@@ -210,7 +210,7 @@ class Run:
             return
         shutil.rmtree(self.work, ignore_errors=True)
         os.makedirs(out)
-        exe = os.path.join(self.work, cfg["exe"])
+        exe = os.path.join(self.work, os.path.basename(cfg["exe"]))
         shutil.copyfile(find_ci(game, cfg["exe"]), exe)
         os.chmod(exe, 0o644)
         for step in patches(cfg, find_ci(game, cfg["exe"])):
@@ -283,7 +283,7 @@ class Run:
         if r.returncode != 0:
             raise Stop("Setup failed linking the game: " + r.stderr.strip()[-300:])
         os.replace(target + ".tmp", target)
-        shutil.copyfile(os.path.join(self.work, self.cfg["exe"]), os.path.join(out, self.cfg["exe"]))
+        shutil.copyfile(os.path.join(self.work, os.path.basename(self.cfg["exe"])), os.path.join(out, os.path.basename(self.cfg["exe"])))
         bar.finish()
 
     def art(self, game, bar):
@@ -297,6 +297,8 @@ class Run:
                     self.tool(step, game, src)
                     exe = os.path.join(self.setup, "bin", os.path.splitext(os.path.basename(helper))[0])
                     subprocess.run([exe, src, os.path.join(self.root, "art")], capture_output=True, timeout=120)
+                elif isinstance(step, list):    # ["script.py", "{art}", ...]: {game} and {art} filled in
+                    self.tool(step[0], *[a.replace("{game}", game).replace("{art}", os.path.join(self.root, "art")) for a in step[1:]])
                 else:
                     self.tool(step, game, os.path.join(self.root, "art"))
             except (Stop, OSError, subprocess.SubprocessError):
