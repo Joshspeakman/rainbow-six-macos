@@ -1,5 +1,7 @@
 # Rainbow Six, native for Apple Silicon Macs and Linux
 
+[![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
+
 Red Storm's **Tom Clancy's Rainbow Six** (1998), statically recompiled from **your own GOG copy (version 1.04)** into
 native code: arm64 with Metal and Core Audio on a Mac, x86-64 with SDL2 and OpenGL on Linux. It doesn't use Wine,
 CrossOver, Rosetta or an emulator.
@@ -384,8 +386,8 @@ from it is for your own use only. Third-party code and credits are listed in [NO
 
 The code in this repository is released under the [MIT License](LICENSE).
 
-## Support
+## Insert Coin
 
-If you get some use out of this, you can buy me a coffee on Ko-fi.
+If this saved you some time (or saved you from buying something twice), you can buy me a Continue on Ko-fi. It's $5 and it keeps me building stuff like this.
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/speakerjosh)
+[![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
