@@ -27,7 +27,9 @@ cat > "$O/stub.c" <<'STUB'
 #include <stdint.h>
 const char rt_fntab[1], rt_images[1], rt_imptab[1]; const unsigned rt_fntab_n, rt_images_n, rt_imptab_n; __thread uint32_t rt_host_rc;
 STUB
-comm -12 <(find "$OUT/obj/rt" "$OUT/obj/host" -name '*.o' -exec nm -u {} + | awk '/^_/{print $1}' | sort -u) <(nm -gU "$OUT"/obj/*.o 2>/dev/null | awk 'NF==3{print $3}' | sort -u) | { grep '^_f_' || true; } | sed -E 's/^_(.*)$/void \1(void) {}/' >> "$O/stub.c"   # game functions the runtime calls directly
+comm -12 <(find "$OUT/obj/rt" "$OUT/obj/host" -name '*.o' -exec nm -u {} + | awk '/^_/{print $1}' | sort -u) <(nm -gU "$OUT"/obj/*.o 2>/dev/null | awk 'NF==3{print $3}' | sort -u) > "$O/from_game.txt"   # what the runtime takes from the game code
+{ grep '^_f_' "$O/from_game.txt" || true; } | sed -E 's/^_(.*)$/void \1(void) {}/' >> "$O/stub.c"   # game functions it calls directly
+{ grep -v '^_f_' "$O/from_game.txt" || true; } | sed -E 's/^_//' | { grep -vxE 'rt_fntab|rt_images|rt_imptab|rt_fntab_n|rt_images_n|rt_imptab_n|rt_host_rc' || true; } | sed -E 's/^(.*)$/const char \1[1];/' >> "$O/stub.c"   # and its other tables (Delta Force: rt_blocks)
 clang -dynamiclib -arch arm64 -install_name @rpath/libgame.dylib -o "$O/libgame.dylib" "$O/stub.c"
 FW=(); for f in $(j frameworks); do FW+=(-framework "$f"); done
 find "$OUT/obj/rt" "$OUT/obj/host" -name '*.o' > "$O/objs.txt"
