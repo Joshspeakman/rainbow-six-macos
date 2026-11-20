@@ -11,16 +11,17 @@
 set -euo pipefail
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"   # what the app runs on: macOS 14 or later (the bundled clang needs 14)
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"; S="$HERE/setup"; GJ="$(cd "$(dirname "${GAME_JSON:-$S/game.json}")" && pwd)/$(basename "${GAME_JSON:-$S/game.json}")"; GAME="$(cd "${1:?usage: make_release.sh <game folder> <tag>}" && pwd)"; TAG="${2:?tag}"
-j() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); v=v.get(sys.argv[2],sys.argv[3] if len(sys.argv)>3 else ""); print(" ".join(map(str,v)) if isinstance(v,list) else v)' "$GJ" "$@"; }
+j() { python3 -c 'import json,os,sys; v=json.load(open(sys.argv[1])); v=v.get(sys.argv[2],sys.argv[3] if len(sys.argv)>3 else ""); x=lambda s: os.path.expandvars(s) if isinstance(s,str) else s; print(" ".join(map(str,map(x,v))) if isinstance(v,list) else x(v))' "$GJ" "$@"; }   # $DEPS, $HOME... in values are filled in
 NAME="$(j name)"; BIN="$(j binary)"; SLUG="${NAME// /-}"; OUTREL="$(j out work/full)"
 REPO_NAME="$(basename "$ROOT")"; B="$HOME/ProjectBuilds/$REPO_NAME"; REL="$B/release"; mkdir -p "$REL" "$B/recomp/work"
 [ -e "$HERE/work" ] || { ln -s "$B/recomp/work" "$HERE/work"; C="$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)"; grep -qxF recomp/work "$C/info/exclude" || echo recomp/work >> "$C/info/exclude"; }
 if [ -L "$HERE/.venv" ] && [ ! -e "$HERE/.venv" ]; then rm -f "${HERE:?}/.venv"; fi   # a link left dangling by a moved build folder
 [ -x "$HERE/.venv/bin/python" ] || { python3 -m venv "$HERE/.venv"; "$HERE/.venv/bin/pip" install -q capstone==5.0.7 unicorn==2.1.4; }
 TK="$HOME/ProjectBuilds/_toolkit/toolkit.tar.xz"; [ -f "$TK" ] || "$S/make_toolkit.sh" "$TK"
+export HERE; if [ -n "$(j deps)" ]; then DEPS="$(cd "$HERE" && bash "$(j deps)" | tail -1)"; export DEPS; fi   # libraries built for this release's macOS (Homeworld: SDL, glslang): $DEPS
 if [ -z "${SKIP_FULL_BUILD:-}" ]; then echo "== full build (for the runtime's objects and to prove this tree builds)"; (cd "$HERE"; GAME="$GAME" bash -c "$(j build)" 2>&1 | tail -2); fi
-OUT="$HERE/$OUTREL"; O="$OUT/obj/easy"; rm -rf "${O:?}"; mkdir -p "$O"
-OLDEST="$(ls -tr "$OUT"/obj/host/*.o 2>/dev/null | head -1)"
+OUT="$HERE/$OUTREL"; O="$OUT/obj/easy"; rm -rf "${O:?}"; mkdir -p "$O" "$OUT/obj/host"; export OUT
+OLDEST="$(ls -tr "$OUT"/obj/host/*.o "$OUT"/obj/rt/*.o 2>/dev/null | head -1 || true)"   # (Homeworld's host is in obj/rt)
 if [ -n "${SKIP_FULL_BUILD:-}" ] && [ -n "$OLDEST" ]; then   # objects built for another macOS than this release's: build them again
   M="$(otool -l "$OLDEST" | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')"
   [ "$M" = "$MACOSX_DEPLOYMENT_TARGET" ] || { echo "make_release: the last full build was for macOS $M, this release is for $MACOSX_DEPLOYMENT_TARGET: run without SKIP_FULL_BUILD" >&2; exit 1; }
@@ -29,7 +30,7 @@ if [ -n "${SKIP_FULL_BUILD:-}" ] && [ -n "$OLDEST" ]; then for f in "$HERE"/host
   case " ${SUITE_LAUNCHER:-} " in *" $(basename "$f") "*) continue;; esac   # a suite's launch window: not part of this game's binary
   if [ -e "$f" ] && [ "$f" -nt "$OLDEST" ]; then echo "make_release: host/$(basename "$f") changed since the last full build: run without SKIP_FULL_BUILD" >&2; exit 1; fi; done; fi
 echo "== the runtime, split from the game"
-clang -c $(j rt_opt -O1) -g -Wall -Wno-unused-function -fno-strict-aliasing -DRT_SPLIT $(j rt_cflags) -I "$HERE/runtime" -I "$HERE/runtime/win32" -o "$OUT/obj/rt/rt.o" "$HERE/runtime/rt.c"
+clang -c $(j rt_opt -O1) -g -Wall -Wno-unused-function -fno-strict-aliasing -DRT_SPLIT $(j rt_cflags) -I "$HERE/runtime" -I "$HERE/runtime/win32" $(for d in $(j rt_includes); do echo -I "$HERE/$d"; done) -o "$OUT/obj/rt/rt.o" "$HERE/runtime/rt.c"
 HM="$(j host_main host/main.m)"; HI=(); for d in $(j host_includes); do HI+=(-I "$HERE/$d"); done   # the host's main file (The Sims: host/sims_mac.m)
 clang -c -O2 -fobjc-arc -Wall -Wno-unused-function -DDS_EASY_INSTALL $(j host_cflags) -I "$HERE/runtime" ${HI[@]+"${HI[@]}"} -DDS_BUILD="\"$TAG\"" -o "$OUT/obj/host/$(basename "$HM" .m).o" "$HERE/$HM"
 XD=(); for d in $(j extra_obj_dirs); do XD+=("$OUT/$d"); done                                                 # more of the app's own objects (The Sims: obj/spirv-cross)
@@ -38,26 +39,33 @@ cat > "$O/stub.c" <<'STUB'
 #include <stdint.h>
 const char rt_fntab[1], rt_images[1], rt_imptab[1]; const unsigned rt_fntab_n, rt_images_n, rt_imptab_n; __thread uint32_t rt_host_rc;
 STUB
-comm -12 <(find "$OUT/obj/rt" "$OUT/obj/host" ${XD[@]+"${XD[@]}"} -name '*.o' -exec nm -u {} + | awk '/^_/{print $1}' | sort -u) <(nm -gU "$OUT"/obj/*.o 2>/dev/null | awk 'NF==3{print $3}' | sort -u) > "$O/from_game.txt"   # what the runtime takes from the game code
+# the runtime's objects; game.json "skip_objects" are left out (Homeworld: the build's own main.o, replaced by host_main) and
+# "game_objects" belong to the game (Homeworld's lifted Mach-O tables, compiled by setup: "game_sources")
+NOT="$(for f in $(j skip_objects) $(j game_objects); do printf '%s|' "$f"; done)"
+find "$OUT/obj/rt" "$OUT/obj/host" ${XD[@]+"${XD[@]}"} -name '*.o' | { if [ -n "$NOT" ]; then grep -vE "/(${NOT%|})$"; else cat; fi; } > "$O/objs.txt"
+GO=(); for f in $(j game_objects); do GO+=("$OUT/obj/rt/$f"); done
+comm -12 <(xargs nm -u < "$O/objs.txt" | awk '/^_/{print $1}' | sort -u) <(nm -gU "$OUT"/obj/*.o ${GO[@]+"${GO[@]}"} 2>/dev/null | awk 'NF==3{print $3}' | sort -u) > "$O/from_game.txt"   # what the runtime takes from the game code
 { grep '^_f_' "$O/from_game.txt" || true; } | sed -E 's/^_(.*)$/void \1(void) {}/' >> "$O/stub.c"   # game functions it calls directly
 { grep -v '^_f_' "$O/from_game.txt" || true; } | sed -E 's/^_//' | { grep -vxE 'rt_fntab|rt_images|rt_imptab|rt_fntab_n|rt_images_n|rt_imptab_n|rt_host_rc' || true; } | sed -E 's/^(.*)$/const char \1[1];/' >> "$O/stub.c"   # and its other tables (Delta Force: rt_blocks)
 clang -dynamiclib -arch arm64 -install_name @rpath/libgame.dylib -o "$O/libgame.dylib" "$O/stub.c"
 FW=(); for f in $(j frameworks); do FW+=(-framework "$f"); done
-find "$OUT/obj/rt" "$OUT/obj/host" ${XD[@]+"${XD[@]}"} -name '*.o' > "$O/objs.txt"
 if [ -n "${SUITE_APP:-}" ]; then A="$SUITE_APP"; else A="$REL/$NAME.app"; rm -rf "${A:?}"; fi; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources/setup"
 clang -o "$A/Contents/MacOS/$BIN" -filelist "$O/objs.txt" -Wl,-weak_library,"$O/libgame.dylib" -Wl,-export_dynamic -Wl,-rpath,@executable_path/../Frameworks "${FW[@]}" -lz $(j link_flags)
 for f in $(j app_files "shaders.metal dsr_snapshot.bin"); do cp "$OUT/app/$f" "$A/Contents/MacOS/"; done   # what the app reads beside its executable
+for g in $(j dylibs); do mkdir -p "$A/Contents/Frameworks"; cp -a "$DEPS"/lib/$g "$A/Contents/Frameworks/"; done   # the libraries it links from $DEPS (@rpath)
 [ -n "${SUITE_APP:-}" ] || { sed -e "s|@REPO@|$(j release_repo)|; s|@ASSET@|$SLUG.zip|" "$S/update.sh" > "$A/Contents/MacOS/update"; chmod +x "$A/Contents/MacOS/update"; }
 echo "== setup files"
 R="$A/Contents/Resources/setup"; mkdir -p "$R/tools" "$R/runtime" "$R/lists"
 cp "$S/setup.py" "$S/game_tls.c" "$R/"; cp -R "$S/include" "$R/include"; cp "$HERE"/tools/*.py "$R/tools/"; cp "$HERE"/runtime/rt*.h "$R/runtime/"; cp "$TK" "$R/toolkit.tar.xz"
+RH=(); for f in $(j runtime_headers); do RH+=("$HERE/$f"); cp "$HERE/$f" "$R/runtime/"; done   # more headers the game's generated code includes (Homeworld: macho_tab.h)
 H="$(j art_helper)"; if [ -n "$H" ]; then mkdir -p "$R/bin"; clang -O2 -fobjc-arc -framework AppKit -framework CoreImage "$HERE/tools/$H" -o "$R/bin/$(basename "$H" .m)"; fi   # an art step's compiled half (the player's Mac has no SDK)
-CODE="$(cat "$HERE"/tools/*.py "$HERE"/runtime/rt*.h "$S"/include/* "$S/game_tls.c" | shasum -a 256 | cut -d' ' -f1)"
+CODE="$(cat "$HERE"/tools/*.py "$HERE"/runtime/rt*.h ${RH[@]+"${RH[@]}"} "$S"/include/* "$S/game_tls.c" | shasum -a 256 | cut -d' ' -f1)"
 CFG="$R/game.json"; [ -z "${SUITE_APP:-}" ] || CFG="$R/$BIN.json"   # a suite: one per game binary (setup_ui.m game_config)
 python3 - "$GJ" "$CFG" "$CODE" "$TAG" <<'PY'
 import json, sys
 c = json.load(open(sys.argv[1])); c["code"] = sys.argv[3]; c["release"] = sys.argv[4]
-for k in ("build", "out", "rt_cflags", "rt_opt", "host_cflags", "frameworks", "link_flags", "binary", "icon_label", "local_network", "release_repo", "bundle_id"): c.pop(k, None)
+for k in ("build", "out", "rt_cflags", "rt_opt", "host_cflags", "frameworks", "link_flags", "binary", "icon_label", "local_network", "release_repo", "bundle_id",
+          "deps", "dylibs", "rt_includes", "host_includes", "host_main", "skip_objects", "game_objects", "runtime_headers", "extra_obj_dirs", "app_files"): c.pop(k, None)
 import os
 if os.environ.get("TEST_EXTRA_EXE_SHA"): c["exe_sha256"][os.environ["TEST_EXTRA_EXE_SHA"]] = "test copy"   # a test build only: a release never sets this
 json.dump(c, open(sys.argv[2], "w"), indent=1)

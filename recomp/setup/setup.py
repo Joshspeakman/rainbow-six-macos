@@ -68,7 +68,7 @@ def find_ci(folder, relative):
 def inside_game(here, cfg):
     """game.json "inside": where the game sits in a store's wrapper app that `here` may be (setup_ui.m inside_game)."""
     for rel in cfg.get("inside", []):
-        d = find_ci(here, rel)
+        d = find_ci(here, rel) if rel else here         # "": the app itself is the game folder (Homeworld Remastered)
         if d and find_ci(d, cfg["exe"]):
             return d
     return None
@@ -287,7 +287,8 @@ class Run:
             self.tool("lift.py", it["path"], it["json"], out, "--tag", it["tag"], "--imp-base", nimp)
             nimp += len(json.load(open(os.path.join(out, it["tag"] + "_image.json")))["imports"])
             imgs.append(f"{it['tag']}={it['file']}")
-        self.tool("link_tables.py", out, *imgs)
+        if cfg.get("link_tables", True):                # (Homeworld's lift writes its own tables)
+            self.tool("link_tables.py", out, *imgs)
         open(stamp, "w").close()
         bar.finish()
 
@@ -307,7 +308,8 @@ class Run:
         bar.stage("compile", "Building the game for your Mac")
         self.objdir = os.path.join(self.work, "obj")
         os.makedirs(self.objdir, exist_ok=True)
-        names = sorted(n for n in os.listdir(self.out) if n.endswith(".c") and ("lift_" in n or n == "fntab.c"))
+        extra = set(self.cfg.get("game_sources", []))  # more of the lift's output that is game code (Homeworld: macho_tab.c)
+        names = sorted(n for n in os.listdir(self.out) if n.endswith(".c") and ("lift_" in n or n == "fntab.c" or n in extra))
         files = [os.path.join(self.out, n) for n in names] + [os.path.join(self.setup, "game_tls.c")]
         ram_gb = int(subprocess.run(["/usr/sbin/sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout) / (1 << 30)
         jobs = max(1, min(os.cpu_count() or 2, int(ram_gb / 2)))
