@@ -1,5 +1,7 @@
 # Rainbow Six, native for Apple Silicon Macs and Linux
 
+![Rainbow Six, native on Apple Silicon](media/hero.jpg)
+
 Red Storm's **Tom Clancy's Rainbow Six** (1998), statically recompiled from **your own GOG copy (version 1.04)** into
 native code: arm64 with Metal and Core Audio on a Mac, x86-64 with SDL2 and OpenGL on Linux. It doesn't use Wine,
 CrossOver, Rosetta or an emulator.
@@ -23,6 +25,13 @@ which takes almost no space), so the folder you installed from can be deleted af
 - [How it works](#how-it-works)
 - [Documentation](#documentation)
 - [Legal](#legal)
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The launch window](media/screenshots/screenshot-launcher.png) | ![Shooting range](media/screenshots/screenshot-01-shooting-range.jpg) |
+| ![Treeline](media/screenshots/screenshot-02-treeline.jpg) | ![Briefing](media/screenshots/screenshot-04-briefing.jpg) |
 
 ## Status
 
