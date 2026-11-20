@@ -116,8 +116,11 @@ static NSString *open_package(NSString *pkg, NSDictionary *cfg, NSString *root, 
     if (find_ci(game, cfg[@"exe"])) return game.stringByStandardizingPath;
     NSFileManager *fm = NSFileManager.defaultManager; [fm removeItemAtPath:dir error:nil];
     [fm createDirectoryAtPath:[dir stringByAppendingPathComponent:@"extracted"] withIntermediateDirectories:YES attributes:nil error:nil];
-    NSArray *steps = @[@[@"/usr/bin/xar", @"-xf", pkg, @"-C", dir, pk[@"member"]],
-                       @[@"/usr/bin/tar", @"-xf", [dir stringByAppendingPathComponent:pk[@"member"]], @"-C", [dir stringByAppendingPathComponent:@"extracted"], pk[@"payload"]]];
+    NSArray *steps = [pk[@"kind"] isEqual:@"zip"]   /* a zip (Brutal Half-Life's bhl_v3.zip): its whole content into extracted/<into> */
+        ? @[@[@"/bin/mkdir", @"-p", [[dir stringByAppendingPathComponent:@"extracted"] stringByAppendingPathComponent:pk[@"into"] ?: @""]],
+            @[@"/usr/bin/ditto", @"-x", @"-k", pkg, [[dir stringByAppendingPathComponent:@"extracted"] stringByAppendingPathComponent:pk[@"into"] ?: @""]]]
+        : @[@[@"/usr/bin/xar", @"-xf", pkg, @"-C", dir, pk[@"member"]],
+            @[@"/usr/bin/tar", @"-xf", [dir stringByAppendingPathComponent:pk[@"member"]], @"-C", [dir stringByAppendingPathComponent:@"extracted"], pk[@"payload"]]];
     for (NSArray *st in steps) {
         NSTask *t = [NSTask new]; t.executableURL = [NSURL fileURLWithPath:st[0]]; t.arguments = [st subarrayWithRange:NSMakeRange(1, st.count - 1)];
         t.standardOutput = t.standardError = [NSFileHandle fileHandleWithNullDevice];
@@ -412,7 +415,9 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
         return;
     }
     _fromSearch = YES;                                   /* found where it lives (a Steam library, another app): never offered to the Trash */
-    void (^use)(NSString *) = ^(NSString *p) { if ([p.pathExtension caseInsensitiveCompare:@"pkg"] == NSOrderedSame) [self tryPath:p]; else [self showFound:p]; };   /* a package is opened first */
+    NSString *pkname = _cfg[@"package"][@"name"];
+    void (^use)(NSString *) = ^(NSString *p) { BOOL isPkg = [p.pathExtension caseInsensitiveCompare:@"pkg"] == NSOrderedSame || (pkname && [p.lastPathComponent caseInsensitiveCompare:pkname] == NSOrderedSame);
+        if (isPkg) [self tryPath:p]; else [self showFound:p]; };   /* a package is opened first */
     if (good.count == 1) { use(good[0][@"path"]); return; }
     NSAlert *a = [NSAlert new]; a.messageText = [NSString stringWithFormat:@"Found %lu copies of %@", (unsigned long)good.count, _cfg[@"name"]];
     a.informativeText = @"Which one should the app use?";
@@ -429,7 +434,8 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
     _fromSearch = NO;
     BOOL dir = NO;
     if (![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&dir]) return;
-    NSString *pkg = !dir && _cfg[@"package"] && [path.pathExtension caseInsensitiveCompare:@"pkg"] == NSOrderedSame ? path : nil;   /* the installer package itself */
+    NSString *pkg = !dir && _cfg[@"package"] && [path.lastPathComponent caseInsensitiveCompare:_cfg[@"package"][@"name"]] == NSOrderedSame ? path : nil;   /* the package itself */
+    if (!pkg && !dir && _cfg[@"package"] && [path.pathExtension caseInsensitiveCompare:@"pkg"] == NSOrderedSame) pkg = path;
     if (!dir) path = path.stringByDeletingLastPathComponent;
     _busy = YES; _note.stringValue = pkg ? @"Opening the package..." : @"Checking that folder..."; _note.textColor = th_dim(_st);
     NSDictionary *cfg = _cfg; NSString *root = _root;
@@ -624,8 +630,10 @@ int ds_easy_install(const char **exe, const char **game, const char **data)
     NSString *root = game_root(cfg), *rc = [root stringByAppendingPathComponent:cfg[@"build_dir"] ?: @"recomp"];
     if (game_is_built(cfg)) {
         unsetenv("DS_SUITE"); unsetenv("DS_SETUP_FOLDER");                /* the game is ready: it runs, never back to a suite */
-        if (!getenv("DS_EASY_READY")) restart_app(cfg);                   /* binds the game at load: see make_release.sh */
-        if (!dlsym(RTLD_DEFAULT, [cfg[@"bound_symbol"] ?: @"rt_fntab" UTF8String])) unsetenv("DS_EASY_READY");   /* the game's library bound (Theme Park's: tp_dispatch) */
+        BOOL nobind = [cfg[@"bound_symbol"] isEqual:@""];                  /* this process never loads the game (Brutal Half-Life's launch window starts the engine) */
+        if (nobind) setenv("DS_EASY_READY", "1", 1);
+        else if (!getenv("DS_EASY_READY")) restart_app(cfg);              /* binds the game at load: see make_release.sh */
+        if (!nobind && !dlsym(RTLD_DEFAULT, [cfg[@"bound_symbol"] ?: @"rt_fntab" UTF8String])) unsetenv("DS_EASY_READY");   /* the game's library bound (Theme Park's: tp_dispatch) */
         else {
             [fm createDirectoryAtPath:[root stringByAppendingPathComponent:@"drive_c/Users/player/Documents"] withIntermediateDirectories:YES attributes:nil error:nil];
             NSString *log = [root stringByAppendingPathComponent:[cfg[@"log"] stringByAppendingString:@".log"]];
