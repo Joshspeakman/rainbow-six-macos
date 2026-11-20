@@ -21,6 +21,7 @@ if [ -z "${SKIP_FULL_BUILD:-}" ]; then echo "== full build (for the runtime's ob
 OUT="$HERE/$OUTREL"; O="$OUT/obj/easy"; rm -rf "${O:?}"; mkdir -p "$O"
 OLDEST="$(ls -tr "$OUT"/obj/host/*.o 2>/dev/null | head -1)"   # SKIP_FULL_BUILD reuses the host's objects: never stale ones (by any name: gr_launcher.m makes launcher.o)
 if [ -n "${SKIP_FULL_BUILD:-}" ] && [ -n "$OLDEST" ]; then for f in "$HERE"/host/*.m "$HERE"/host/*.mm "$HERE"/host/*.h; do
+  case " ${SUITE_LAUNCHER:-} " in *" $(basename "$f") "*) continue;; esac   # a suite's launch window: not part of this game's binary
   if [ -e "$f" ] && [ "$f" -nt "$OLDEST" ]; then echo "make_release: host/$(basename "$f") changed since the last full build: run without SKIP_FULL_BUILD" >&2; exit 1; fi; done; fi
 echo "== the runtime, split from the game"
 clang -c $(j rt_opt -O1) -g -Wall -Wno-unused-function -fno-strict-aliasing -DRT_SPLIT $(j rt_cflags) -I "$HERE/runtime" -I "$HERE/runtime/win32" -o "$OUT/obj/rt/rt.o" "$HERE/runtime/rt.c"

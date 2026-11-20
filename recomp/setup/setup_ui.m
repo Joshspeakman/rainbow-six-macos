@@ -171,7 +171,7 @@ static NSArray<NSDictionary *> *search_game(NSDictionary *cfg, volatile BOOL *st
 }
 static BOOL game_is_built(NSDictionary *cfg)
 {
-    NSString *rc = [game_root(cfg) stringByAppendingPathComponent:@"recomp"];
+    NSString *rc = [game_root(cfg) stringByAppendingPathComponent:cfg[@"build_dir"] ?: @"recomp"];
     NSData *d = [NSData dataWithContentsOfFile:[rc stringByAppendingPathComponent:@"ready.json"]];
     NSDictionary *r = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
     return r && [r[@"code"] isEqual:cfg[@"code"]] && [NSFileManager.defaultManager fileExistsAtPath:[rc stringByAppendingPathComponent:@"libgame.dylib"]];
@@ -180,7 +180,7 @@ static void restart_app(NSDictionary *cfg)
 {
     const char *suite = getenv("DS_SUITE");   /* started by a suite's launch window: back to it, which now shows the game ready */
     if (suite && *suite) { char *const sv[] = {(char *)suite, NULL}; unsetenv("DS_SUITE"); unsetenv("DS_SETUP_FOLDER"); execv(suite, sv); }
-    NSString *rc = [game_root(cfg) stringByAppendingPathComponent:@"recomp"];
+    NSString *rc = [game_root(cfg) stringByAppendingPathComponent:cfg[@"build_dir"] ?: @"recomp"];
     setenv("DYLD_LIBRARY_PATH", rc.fileSystemRepresentation, 1); setenv("DS_EASY_READY", "1", 1);
     const char *self = NSBundle.mainBundle.executablePath.fileSystemRepresentation;
     char *const av[] = {(char *)self, NULL};
@@ -564,7 +564,7 @@ int ds_easy_install(const char **exe, const char **game, const char **data)
     NSDictionary *cfg = game_config();
     if (!cfg) return -1;
     NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *root = game_root(cfg), *rc = [root stringByAppendingPathComponent:@"recomp"];
+    NSString *root = game_root(cfg), *rc = [root stringByAppendingPathComponent:cfg[@"build_dir"] ?: @"recomp"];
     if (game_is_built(cfg)) {
         unsetenv("DS_SUITE"); unsetenv("DS_SETUP_FOLDER");                /* the game is ready: it runs, never back to a suite */
         if (!getenv("DS_EASY_READY")) restart_app(cfg);                   /* binds the game at load: see make_release.sh */
