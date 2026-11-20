@@ -21,7 +21,7 @@ done
 A="$REL/$NAME.app"; rm -rf "${A:?}"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources/setup"
 k=0; for id in $IDS; do
   echo "==== $id"
-  SUITE_APP="$A" GAME_JSON="$S/$id.json" bash "$S/make_release.sh" "${FOLDERS[$k]}" "$TAG" | grep -E '^==|lists:|release check|error'
+  SUITE_APP="$A" SUITE_LAUNCHER="$(for f in $(j launcher); do basename "$f"; done | tr '\n' ' ')" GAME_JSON="$S/$id.json" bash "$S/make_release.sh" "${FOLDERS[$k]}" "$TAG" | grep -E '^==|lists:|release check|error'
   k=$((k + 1))
 done
 echo "==== the launch window"
@@ -29,9 +29,9 @@ FW=(); for f in $(j launcher_frameworks); do FW+=(-framework "$f"); done
 SRC=(); for f in $(j launcher); do SRC+=("$HERE/$f"); done
 clang -O2 -fobjc-arc -Wall "${FW[@]}" -o "$A/Contents/MacOS/$BIN" "${SRC[@]}"
 for f in $(j resources); do cp "$HERE/$f" "$A/Contents/Resources/"; done
-python3 -c 'import json,sys; [print(h["name"] + "\t" + h["dir"] + "\t" + h["build"]) for h in json.load(open(sys.argv[1])).get("helpers", [])]' "$SJ" |
-while IFS=$'\t' read -r hn hd hb; do   # small tools the launch window runs, built here (the player's Mac has no compiler): Resources/bin
-  mkdir -p "$A/Contents/Resources/bin"; (cd "$HERE/$hd"; OUT="$A/Contents/Resources/bin/$hn" bash -c "$hb")
+python3 -c 'import json,sys; [print(h.get("path", "bin/" + h["name"]) + "\t" + h["dir"] + "\t" + h["build"]) for h in json.load(open(sys.argv[1])).get("helpers", [])]' "$SJ" |
+while IFS=$'\t' read -r hp hd hb; do   # tools the app runs, built here (the player's Mac has no compiler): Resources/bin unless "path" says
+  mkdir -p "$(dirname "$A/Contents/Resources/$hp")"; (cd "$HERE/$hd"; OUT="$A/Contents/Resources/$hp" bash -c "$hb")
 done
 sed -e "s|@REPO@|$(j release_repo)|; s|@ASSET@|$SLUG.zip|" "$S/update.sh" > "$A/Contents/MacOS/update"; chmod +x "$A/Contents/MacOS/update"
 echo "== icon and bundle"

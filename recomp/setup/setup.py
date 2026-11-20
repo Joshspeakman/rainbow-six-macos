@@ -23,7 +23,7 @@ class Stop(Exception):
 
 
 # how much of the bar each stage takes: set from timing a real run
-STAGES = [("copy", 4), ("analyse", 6), ("lift", 22), ("compile", 62), ("link", 3), ("art", 3)]
+STAGES = [("copy", 4), ("prepare", 6), ("analyse", 6), ("lift", 20), ("compile", 58), ("link", 3), ("art", 3)]
 
 
 class Bar:
@@ -172,6 +172,28 @@ class Run:
         self.llvm = os.path.join(a.tools, "llvm", "bin")
         self.toolsrc = os.path.join(a.setup, "tools")
         self.env = dict(os.environ, PYTHONPATH=self.toolsrc)
+        bin_dir = os.path.normpath(os.path.join(a.setup, "..", "bin"))   # tools built into the app (a suite's "helpers": ffmpeg)
+        if os.path.isdir(bin_dir):
+            self.env["PATH"] = bin_dir + os.pathsep + self.env.get("PATH", "/usr/bin:/bin")
+
+    def observed(self, folder):
+        """game.json "observed_targets": entry points reached by jumps only, which analyze.py reads beside its output."""
+        if self.cfg.get("observed_targets"):
+            with open(os.path.join(folder, "observed_targets.json"), "w") as f:
+                json.dump(self.cfg["observed_targets"], f)
+
+    def prepare(self, game, bar):
+        """game.json "prepare": steps on the copied game before it is built ([script, args], {game} filled in: Resident
+        Evil's movies converted to MPEG-1 beside the originals). Each one may take a while; already done work is kept."""
+        steps = self.cfg.get("prepare", [])
+        if not steps:
+            bar.done += dict(STAGES)["prepare"]     # nothing to do: its share of the bar is passed over
+            return
+        bar.stage("prepare", self.cfg.get("prepare_text", "Preparing the game files"))
+        for n, step in enumerate(steps):
+            self.tool(step[0], *[a.replace("{game}", game) for a in step[1:]])
+            bar.at((n + 1) / len(steps))
+        bar.finish()
 
     def tool(self, script, *args):
         r = subprocess.run([self.py, os.path.join(self.toolsrc, script), *map(str, args)], env=self.env, capture_output=True, text=True)
@@ -192,6 +214,7 @@ class Run:
         if os.path.exists(ship):
             shutil.copyfile(ship, out)
         else:
+            self.observed(os.path.dirname(os.path.abspath(out)))
             self.tool("analyze.py", path, out)
 
     def items(self, game, exe):
@@ -221,7 +244,11 @@ class Run:
             self.patch(step, exe)
         for it in self.items(game, exe):
             out = os.path.join(dest, sha256(it["path"]) + ".json")
+            if it.get("main"):
+                self.observed(dest)
             self.tool("analyze.py", it["path"], out)
+            if os.path.exists(os.path.join(dest, "observed_targets.json")):
+                os.remove(os.path.join(dest, "observed_targets.json"))
             d = json.load(open(out))
             with open(out, "w") as f:
                 json.dump(d, f, separators=(",", ":"))
@@ -299,7 +326,7 @@ class Run:
 
     def link(self, game, bar):
         bar.stage("link", "Putting it together")
-        out = os.path.join(self.root, "recomp")
+        out = os.path.join(self.root, self.cfg.get("build_dir", "recomp"))   # two programs of one game: a folder each
         os.makedirs(out, exist_ok=True)
         objs = sorted(os.path.join(self.objdir, n) for n in os.listdir(self.objdir) if n.endswith(".o"))
         lst = os.path.join(self.work, "objs.txt")
@@ -390,12 +417,13 @@ def main():
     else:
         check_game(dest, cfg)
     bar.finish()
+    run.prepare(dest, bar)
     run.lift_all(dest, bar)
     run.compile_all(bar)
     run.link(dest, bar)
     run.art(dest, bar)
     ready = {"code": cfg["code"], "exe": sha256(find_ci(dest, cfg["exe"])), "when": int(time.time())}
-    with open(os.path.join(a.root, "recomp", "ready.json"), "w") as f:
+    with open(os.path.join(a.root, cfg.get("build_dir", "recomp"), "ready.json"), "w") as f:
         json.dump(ready, f)
     shutil.rmtree(os.path.join(a.root, ".setup"), ignore_errors=True)
     say(stage="done", pct=100, text="Ready")
