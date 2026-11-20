@@ -6,6 +6,7 @@
 # isn't set up runs that game's binary, which shows its setup window and comes back to the launch window when done
 # (setup_ui.m: DS_SUITE). Every game must be given: the release check runs over all of them.
 set -euo pipefail
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"   # what the app runs on: macOS 14 or later (the bundled clang needs 14)
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"; S="$HERE/setup"; SJ="$S/suite.json"
 TAG="${1:?usage: make_suite.sh <version tag> <id>=<game folder> ...}"; shift
 j() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); v=v.get(sys.argv[2],sys.argv[3] if len(sys.argv)>3 else ""); print(" ".join(map(str,v)) if isinstance(v,list) else v)' "$SJ" "$@"; }
@@ -47,7 +48,7 @@ cat > "$A/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>$(j bundle_id)</string><key>CFBundleExecutable</key><string>$BIN</string>
   <key>CFBundleIconFile</key><string>icon</string><key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${TAG#v}</string><key>LSApplicationCategoryType</key><string>public.app-category.games</string>
-  <key>GCSupportsGameMode</key><true/><key>LSMinimumSystemVersion</key><string>13.0</string><key>NSHighResolutionCapable</key><true/>
+  <key>GCSupportsGameMode</key><true/><key>LSMinimumSystemVersion</key><string>$MACOSX_DEPLOYMENT_TARGET</string><key>NSHighResolutionCapable</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>$(j local_network)</string>
   <key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Game Folder</string><key>CFBundleTypeRole</key><string>Viewer</string>
     <key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>public.folder</string></array></dict></array>

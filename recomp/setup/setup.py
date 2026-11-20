@@ -129,7 +129,7 @@ def merge_addons(src, dest, cfg):
             continue
         for rel in add.get("look", []):
             there = os.path.normpath(os.path.join(src, rel))
-            if os.path.isdir(there):
+            if os.path.exists(there):                   # a folder (Ghost Recon's Mods/Mp1) or a file (San Andreas' msvcr71.dll)
                 into = os.path.join(dest, add["into"])
                 os.makedirs(os.path.dirname(into), exist_ok=True)
                 if subprocess.run(["/bin/cp", "-cR", there, into], capture_output=True).returncode != 0:
