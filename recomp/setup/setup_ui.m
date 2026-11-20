@@ -58,7 +58,7 @@ static NSString *game_root(NSDictionary *cfg)
  * San Andreas: <game>.app/Contents/Resources/transgaming/c_drive/...); the folder holding the executable, or nil */
 static NSString *inside_game(NSString *here, NSDictionary *cfg)
 {
-    for (NSString *rel in cfg[@"inside"]) { NSString *d = find_ci(here, rel); if (d && find_ci(d, cfg[@"exe"])) return d; }
+    for (NSString *rel in cfg[@"inside"]) { NSString *d = rel.length ? find_ci(here, rel) : here; if (d && find_ci(d, cfg[@"exe"])) return d; }   /* "": the app is the game (Homeworld) */
     return nil;
 }
 /* the folder at or under `path` (3 levels at most) holding the game's executable */

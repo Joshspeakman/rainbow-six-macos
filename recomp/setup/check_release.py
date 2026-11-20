@@ -18,9 +18,44 @@ def ci(folder, rel):
     return here
 
 
+def macho_text(d):
+    """A Mach-O's (thin, 32- or 64-bit, or the first slice of a fat file) __TEXT,__text: (file offset, size), or None."""
+    magic = struct.unpack_from(">I", d, 0)[0]
+    if magic in (0xcafebabe, 0xcafebabf):                       # fat: the first architecture (its fat_arch offset field)
+        off = struct.unpack_from(">I", d, 16)[0]
+        t = macho_text(d[off:])
+        return (t[0] + off, t[1]) if t else None
+    m = struct.unpack_from("<I", d, 0)[0]
+    if m not in (0xfeedface, 0xfeedfacf):
+        return None
+    is64 = m == 0xfeedfacf
+    ncmds = struct.unpack_from("<I", d, 16)[0]
+    p = 32 if is64 else 28
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from("<II", d, p)
+        if cmd in (0x1, 0x19):                                   # LC_SEGMENT, LC_SEGMENT_64
+            nsect = struct.unpack_from("<I", d, p + (64 if is64 else 48))[0]
+            q = p + (72 if is64 else 56)
+            for _ in range(nsect):
+                sect, seg = d[q:q + 16].rstrip(b"\0"), d[q + 16:q + 32].rstrip(b"\0")
+                if seg == b"__TEXT" and sect == b"__text":
+                    if is64:
+                        sz, off = struct.unpack_from("<QI", d, q + 40)
+                    else:
+                        sz, off = struct.unpack_from("<II", d, q + 36)
+                    return off, sz
+                q += 80 if is64 else 68
+        p += size
+    return None
+
+
 def code_samples(path):
-    """A few 48-byte stretches of the file's first executable section."""
+    """A few 48-byte stretches of the file's first executable section (a Windows PE, or a Mac Mach-O: Homeworld)."""
     d = open(path, "rb").read()
+    t = macho_text(d)
+    if t:
+        raw, size = t
+        return [d[raw + size * k // 9: raw + size * k // 9 + 48] for k in range(1, 9)]
     pe = struct.unpack_from("<I", d, 0x3c)[0]
     n = struct.unpack_from("<H", d, pe + 6)[0]
     opt = struct.unpack_from("<H", d, pe + 20)[0]
