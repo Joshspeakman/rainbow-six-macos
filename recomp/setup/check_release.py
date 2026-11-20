@@ -56,7 +56,9 @@ def code_samples(path):
     if t:
         raw, size = t
         return [d[raw + size * k // 9: raw + size * k // 9 + 48] for k in range(1, 9)]
-    pe = struct.unpack_from("<I", d, 0x3c)[0]
+    pe = struct.unpack_from("<I", d, 0x3c)[0] if len(d) > 0x40 else 0
+    if d[:2] != b"MZ" or d[pe:pe + 4] != b"PE\0\0":     # neither PE nor Mach-O (a DOS/4GW LE program: Theme Park): the whole file
+        return [d[len(d) * k // 9: len(d) * k // 9 + 48] for k in range(1, 9)]
     n = struct.unpack_from("<H", d, pe + 6)[0]
     opt = struct.unpack_from("<H", d, pe + 20)[0]
     for i in range(n):
