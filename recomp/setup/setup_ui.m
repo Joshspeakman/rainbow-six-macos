@@ -614,7 +614,7 @@ int ds_easy_install(const char **exe, const char **game, const char **data)
     if (game_is_built(cfg)) {
         unsetenv("DS_SUITE"); unsetenv("DS_SETUP_FOLDER");                /* the game is ready: it runs, never back to a suite */
         if (!getenv("DS_EASY_READY")) restart_app(cfg);                   /* binds the game at load: see make_release.sh */
-        if (!dlsym(RTLD_DEFAULT, "rt_fntab")) unsetenv("DS_EASY_READY");
+        if (!dlsym(RTLD_DEFAULT, [cfg[@"bound_symbol"] ?: @"rt_fntab" UTF8String])) unsetenv("DS_EASY_READY");   /* the game's library bound (Theme Park's: tp_dispatch) */
         else {
             [fm createDirectoryAtPath:[root stringByAppendingPathComponent:@"drive_c/Users/player/Documents"] withIntermediateDirectories:YES attributes:nil error:nil];
             NSString *log = [root stringByAppendingPathComponent:[cfg[@"log"] stringByAppendingString:@".log"]];
