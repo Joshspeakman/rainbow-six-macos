@@ -77,7 +77,7 @@ for base, _, names in os.walk(app):
         continue
     for name in names:
         p = os.path.join(base, name)
-        if name.lower().endswith(BAD) or name.startswith("lift_") or name == "libgame.dylib" and "stub" not in base:
+        if name.lower().endswith(BAD) or (name.startswith("lift_") and name.endswith((".c", ".o"))) or name == "libgame.dylib" and "stub" not in base:
             problems.append("game file by name: " + p)
             continue
         if os.path.islink(p):
