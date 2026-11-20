@@ -4,6 +4,7 @@
 // player's own game folder: dropped on the app's icon, dropped on this window, chosen in a panel, found by Search, or
 // put in ~/Games/<Game>/Put Game Files Here. Once a folder checks out it offers setup, runs setup.py with the bundled tools, and
 // restarts into the normal launcher. An update that changes the game code runs the same setup again on its own.
+#include <libproc.h>
 #import <Cocoa/Cocoa.h>
 #import <CommonCrypto/CommonDigest.h>
 #import "theme.h"
@@ -536,7 +537,17 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
                 dispatch_async(dispatch_get_main_queue(), ^{ [self progress:[m[@"pct"] doubleValue] text:m[@"text"]]; });
             }
         };
+        /* a setup still running for this game (the app was quit or ended while it ran: setup.py leads its own process group)
+         * is stopped first, so two never build in the same folder */
+        NSString *pidf = [root stringByAppendingPathComponent:@".setup/setup.pid"];
+        pid_t old = (pid_t)[[NSString stringWithContentsOfFile:pidf encoding:NSUTF8StringEncoding error:nil] intValue];
+        char oldpath[PROC_PIDPATHINFO_MAXSIZE] = "";
+        if (old > 1 && kill(old, 0) == 0 && proc_pidpath(old, oldpath, sizeof oldpath) > 0
+            && strcmp(oldpath, [tools stringByAppendingPathComponent:@"python/bin/python3"].stringByResolvingSymlinksInPath.fileSystemRepresentation) == 0) {   /* (that pid is still this game's setup, not a reused one) */
+            kill(-old, SIGTERM); for (int k = 0; k < 50 && kill(old, 0) == 0; k++) usleep(100000);
+        }
         NSError *e = nil; [t launchAndReturnError:&e];
+        if (!e) [[NSString stringWithFormat:@"%d", t.processIdentifier] writeToFile:pidf atomically:YES encoding:NSUTF8StringEncoding error:nil];
         if (!e) [t waitUntilExit];
         pipe.fileHandleForReading.readabilityHandler = nil;
         dispatch_async(dispatch_get_main_queue(), ^{
