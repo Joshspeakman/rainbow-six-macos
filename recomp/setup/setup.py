@@ -129,7 +129,7 @@ def merge_addons(src, dest, cfg):
         if find_ci(dest, add["into"]):
             continue
         for rel in add.get("look", []):
-            there = os.path.normpath(os.path.join(src, rel))
+            there = os.path.normpath(os.path.join(src, os.path.expanduser(rel)))   # beside the game, or ~/... (Steam's Half-Life)
             if os.path.exists(there):                   # a folder (Ghost Recon's Mods/Mp1) or a file (San Andreas' msvcr71.dll)
                 into = os.path.join(dest, add["into"])
                 os.makedirs(os.path.dirname(into), exist_ok=True)
