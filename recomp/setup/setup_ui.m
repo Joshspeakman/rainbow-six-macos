@@ -119,6 +119,7 @@ static NSArray<NSString *> *search_roots(void)
             [libs addObject:[[vdf substringWithRange:[m rangeAtIndex:1]] stringByReplacingOccurrencesOfString:@"\\\\" withString:@"/"]];
     }
     for (NSString *lib in libs) { [roots addObject:[lib stringByAppendingPathComponent:@"steamapps/common"]]; [roots addObject:[lib stringByAppendingPathComponent:@"steamapps/content"]]; }
+    [roots addObject:[steam stringByAppendingPathComponent:@"Steam.AppBundle/Steam/Contents/MacOS/steamapps/content"]];   /* where the console's download_depot puts them on a Mac */
     for (NSString *b in [fm contentsOfDirectoryAtPath:[home stringByAppendingPathComponent:@"Library/Application Support/CrossOver/Bottles"] error:nil])
         for (NSString *pf in @[@"Program Files", @"Program Files (x86)", @"GOG Games", @"Games"])
             [roots addObject:[NSString stringWithFormat:@"%@/Library/Application Support/CrossOver/Bottles/%@/drive_c/%@", home, b, pf]];

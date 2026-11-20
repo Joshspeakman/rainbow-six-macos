@@ -9,6 +9,7 @@
 # check_release.py fails the release otherwise. The game piece is a separate library the executable links weakly, so the app
 # runs before the game exists and binds it once setup has built it (setup_ui.m restarts itself with the library path set).
 set -euo pipefail
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"   # what the app runs on: macOS 14 or later (the bundled clang needs 14)
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"; S="$HERE/setup"; GJ="$(cd "$(dirname "${GAME_JSON:-$S/game.json}")" && pwd)/$(basename "${GAME_JSON:-$S/game.json}")"; GAME="$(cd "${1:?usage: make_release.sh <game folder> <tag>}" && pwd)"; TAG="${2:?tag}"
 j() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); v=v.get(sys.argv[2],sys.argv[3] if len(sys.argv)>3 else ""); print(" ".join(map(str,v)) if isinstance(v,list) else v)' "$GJ" "$@"; }
 NAME="$(j name)"; BIN="$(j binary)"; SLUG="${NAME// /-}"; OUTREL="$(j out work/full)"
@@ -19,7 +20,11 @@ if [ -L "$HERE/.venv" ] && [ ! -e "$HERE/.venv" ]; then rm -f "${HERE:?}/.venv";
 TK="$HOME/ProjectBuilds/_toolkit/toolkit.tar.xz"; [ -f "$TK" ] || "$S/make_toolkit.sh" "$TK"
 if [ -z "${SKIP_FULL_BUILD:-}" ]; then echo "== full build (for the runtime's objects and to prove this tree builds)"; (cd "$HERE"; GAME="$GAME" bash -c "$(j build)" 2>&1 | tail -2); fi
 OUT="$HERE/$OUTREL"; O="$OUT/obj/easy"; rm -rf "${O:?}"; mkdir -p "$O"
-OLDEST="$(ls -tr "$OUT"/obj/host/*.o 2>/dev/null | head -1)"   # SKIP_FULL_BUILD reuses the host's objects: never stale ones (by any name: gr_launcher.m makes launcher.o)
+OLDEST="$(ls -tr "$OUT"/obj/host/*.o 2>/dev/null | head -1)"
+if [ -n "${SKIP_FULL_BUILD:-}" ] && [ -n "$OLDEST" ]; then   # objects built for another macOS than this release's: build them again
+  M="$(otool -l "$OLDEST" | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')"
+  [ "$M" = "$MACOSX_DEPLOYMENT_TARGET" ] || { echo "make_release: the last full build was for macOS $M, this release is for $MACOSX_DEPLOYMENT_TARGET: run without SKIP_FULL_BUILD" >&2; exit 1; }
+fi   # SKIP_FULL_BUILD reuses the host's objects: never stale ones (by any name: gr_launcher.m makes launcher.o)
 if [ -n "${SKIP_FULL_BUILD:-}" ] && [ -n "$OLDEST" ]; then for f in "$HERE"/host/*.m "$HERE"/host/*.mm "$HERE"/host/*.h; do
   case " ${SUITE_LAUNCHER:-} " in *" $(basename "$f") "*) continue;; esac   # a suite's launch window: not part of this game's binary
   if [ -e "$f" ] && [ "$f" -nt "$OLDEST" ]; then echo "make_release: host/$(basename "$f") changed since the last full build: run without SKIP_FULL_BUILD" >&2; exit 1; fi; done; fi
@@ -74,7 +79,7 @@ cat > "$A/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>$(j bundle_id)</string><key>CFBundleExecutable</key><string>$BIN</string>
   <key>CFBundleIconFile</key><string>icon</string><key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${TAG#v}</string><key>LSApplicationCategoryType</key><string>public.app-category.games</string>
-  <key>GCSupportsGameMode</key><true/><key>LSMinimumSystemVersion</key><string>13.0</string><key>NSHighResolutionCapable</key><true/>
+  <key>GCSupportsGameMode</key><true/><key>LSMinimumSystemVersion</key><string>$MACOSX_DEPLOYMENT_TARGET</string><key>NSHighResolutionCapable</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>$(j local_network)</string>
   <key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Game Folder</string><key>CFBundleTypeRole</key><string>Viewer</string>
     <key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>public.folder</string></array></dict></array>
