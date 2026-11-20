@@ -103,6 +103,40 @@ static NSString *check_game(NSString *folder, NSDictionary *cfg)
         return [NSString stringWithFormat:@"That copy of %@ is incomplete: %@ is missing.", cfg[@"name"], r];
     return nil;
 }
+/* game.json "package": an installer package the game can come in (GOG's Mac .pkg of Theme Park): {name, sha256, member,
+ * payload}. Checked against its hash, then only the game is taken out (xar and tar; nothing in it is run) into
+ * <root>/.setup/package. The folder holding the game, or nil with *problem set. */
+static NSString *open_package(NSString *pkg, NSDictionary *cfg, NSString *root, NSString **problem)
+{
+    NSDictionary *pk = cfg[@"package"];
+    if (!pk) return nil;
+    if (![sha256_of(pkg) isEqualToString:pk[@"sha256"]]) { *problem = [NSString stringWithFormat:@"That isn't the package this app works with (%@).", pk[@"name"]]; return nil; }
+    NSString *dir = [root stringByAppendingPathComponent:@".setup/package"], *game = [[dir stringByAppendingPathComponent:@"extracted"] stringByAppendingPathComponent:pk[@"payload"]];
+    if (find_ci(game, cfg[@"exe"])) return game.stringByStandardizingPath;
+    NSFileManager *fm = NSFileManager.defaultManager; [fm removeItemAtPath:dir error:nil];
+    [fm createDirectoryAtPath:[dir stringByAppendingPathComponent:@"extracted"] withIntermediateDirectories:YES attributes:nil error:nil];
+    NSArray *steps = @[@[@"/usr/bin/xar", @"-xf", pkg, @"-C", dir, pk[@"member"]],
+                       @[@"/usr/bin/tar", @"-xf", [dir stringByAppendingPathComponent:pk[@"member"]], @"-C", [dir stringByAppendingPathComponent:@"extracted"], pk[@"payload"]]];
+    for (NSArray *st in steps) {
+        NSTask *t = [NSTask new]; t.executableURL = [NSURL fileURLWithPath:st[0]]; t.arguments = [st subarrayWithRange:NSMakeRange(1, st.count - 1)];
+        t.standardOutput = t.standardError = [NSFileHandle fileHandleWithNullDevice];
+        if (![t launchAndReturnError:nil]) { *problem = @"Couldn't open the package."; return nil; }
+        [t waitUntilExit];
+        if (t.terminationStatus) { *problem = @"Couldn't open the package: is there enough free space?"; return nil; }
+    }
+    if (!find_ci(game, cfg[@"exe"])) { *problem = @"The package didn't have the game in it."; return nil; }
+    return game.stringByStandardizingPath;
+}
+static NSString *package_in(NSString *folder, NSDictionary *cfg)   /* the package file in a dropped folder (Downloads), 2 levels at most */
+{
+    NSString *name = cfg[@"package"][@"name"]; if (!name) return nil;
+    NSString *hit = find_ci(folder, name); if (hit) return hit;
+    for (NSString *n in [NSFileManager.defaultManager contentsOfDirectoryAtPath:folder error:nil]) {
+        NSString *sub = [folder stringByAppendingPathComponent:n]; BOOL d = NO;
+        if (![n hasPrefix:@"."] && [NSFileManager.defaultManager fileExistsAtPath:sub isDirectory:&d] && d && (hit = find_ci(sub, name))) return hit;
+    }
+    return nil;
+}
 /* Search: where a copy of the game is likely to be. Steam's libraries (the default one and each libraryfolders.vdf names:
  * installed games, and depots downloaded from Steam's console), CrossOver and Wine bottles, GOG's folders, the usual
  * places in the home folder and other disks. game.json's "search" adds folder names to look for first. */
@@ -148,6 +182,12 @@ static NSArray<NSDictionary *> *search_game(NSDictionary *cfg, volatile BOOL *st
         NSArray *names = [fm contentsOfDirectoryAtPath:here error:nil];
         BOOL hit = NO;
         for (NSString *n in names) if ([n caseInsensitiveCompare:first] == NSOrderedSame) { hit = YES; break; }
+        NSDictionary *pk = cfg[@"package"];
+        if (pk) for (NSString *n in names) if ([n caseInsensitiveCompare:pk[@"name"]] == NSOrderedSame) {   /* the installer package (Downloads) */
+            NSString *f = [here stringByAppendingPathComponent:n];
+            [found addObject:[sha256_of(f) isEqualToString:pk[@"sha256"]] ? @{@"path": f, @"version": pk[@"version"] ?: @"the installer package"}
+                                                                            : @{@"path": f, @"problem": @"That isn't the package this app works with."}];
+        }
         if (hit && find_ci(here, exe)) {
             NSString *problem = check_game(here, cfg);
             [found addObject:problem ? @{@"path": here, @"problem": problem} : @{@"path": here, @"version": found_version(here, cfg)}];
@@ -371,14 +411,15 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
         return;
     }
     _fromSearch = YES;                                   /* found where it lives (a Steam library, another app): never offered to the Trash */
-    if (good.count == 1) { [self showFound:good[0][@"path"]]; return; }
+    void (^use)(NSString *) = ^(NSString *p) { if ([p.pathExtension caseInsensitiveCompare:@"pkg"] == NSOrderedSame) [self tryPath:p]; else [self showFound:p]; };   /* a package is opened first */
+    if (good.count == 1) { use(good[0][@"path"]); return; }
     NSAlert *a = [NSAlert new]; a.messageText = [NSString stringWithFormat:@"Found %lu copies of %@", (unsigned long)good.count, _cfg[@"name"]];
     a.informativeText = @"Which one should the app use?";
     NSPopUpButton *pop = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 460, 26) pullsDown:NO];
     for (NSDictionary *f in good) [pop addItemWithTitle:[NSString stringWithFormat:@"%@ (%@)", [f[@"path"] stringByAbbreviatingWithTildeInPath], f[@"version"]]];
     a.accessoryView = pop; [a addButtonWithTitle:@"Use This One"]; [a addButtonWithTitle:@"Cancel"];
     [a beginSheetModalForWindow:_win completionHandler:^(NSModalResponse r) {
-        if (r == NSAlertFirstButtonReturn) [self showFound:good[(NSUInteger)pop.indexOfSelectedItem][@"path"]]; else [self showWaiting:nil];
+        if (r == NSAlertFirstButtonReturn) use(good[(NSUInteger)pop.indexOfSelectedItem][@"path"]); else [self showWaiting:nil];
     }];
 }
 - (void)tryPath:(NSString *)path
@@ -387,12 +428,16 @@ static NSRect window_in(NSView *v, ArtView *art) { return [v convertRect:art.bou
     _fromSearch = NO;
     BOOL dir = NO;
     if (![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&dir]) return;
+    NSString *pkg = !dir && _cfg[@"package"] && [path.pathExtension caseInsensitiveCompare:@"pkg"] == NSOrderedSame ? path : nil;   /* the installer package itself */
     if (!dir) path = path.stringByDeletingLastPathComponent;
-    _busy = YES; _note.stringValue = @"Checking that folder..."; _note.textColor = th_dim(_st);
-    NSDictionary *cfg = _cfg;
+    _busy = YES; _note.stringValue = pkg ? @"Opening the package..." : @"Checking that folder..."; _note.textColor = th_dim(_st);
+    NSDictionary *cfg = _cfg; NSString *root = _root;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSString *game = locate_game(path, cfg);
-        NSString *problem = game ? check_game(game, cfg) : [NSString stringWithFormat:@"That folder doesn't have %@ in it.", cfg[@"exe"]];
+        NSString *game = pkg ? nil : locate_game(path, cfg), *problem = nil;
+        NSString *p = pkg ?: (game ? nil : package_in(path, cfg));
+        if (p) game = open_package(p, cfg, root, &problem);
+        if (!problem) problem = game ? check_game(game, cfg) : [NSString stringWithFormat:@"That folder doesn't have %@ in it.", cfg[@"exe"]];
+        if (p && !problem) self->_fromSearch = YES;                                   /* taken out of a package: nothing to put in the Trash */
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_busy = NO;
             if (problem) [self showWaiting:problem]; else [self showFound:game];

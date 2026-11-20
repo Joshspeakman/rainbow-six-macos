@@ -11,7 +11,8 @@ last finished file. A store's copy may carry the store's wrapper on its executab
 per accepted executable, the step that takes it off the copy here, from the player's own files. Nothing else touches copy
 protection.
 """
-import argparse, concurrent.futures, hashlib, json, os, shutil, signal, subprocess, sys, threading, time
+import argparse
+import functools, concurrent.futures, hashlib, json, os, shutil, signal, subprocess, sys, threading, time
 
 
 def say(**msg):
@@ -344,6 +345,33 @@ class Run:
         shutil.copyfile(os.path.join(self.work, os.path.basename(self.cfg["exe"])), os.path.join(out, os.path.basename(self.cfg["exe"])))
         bar.finish()
 
+    def pipeline(self, game, bar):
+        """game.json "pipeline": [script, args] that builds the game its own way in place of lift, compile and link
+        (Theme Park: a DOS game through its own lifter, tools/dropin_build.py). {game} {out} {work} {setup} {llvm}
+        {macos} are filled in; its "@progress <0..1> <text>" lines move the bar."""
+        cfg = self.cfg
+        bar.done += dict(STAGES)["analyse"] + dict(STAGES)["lift"]
+        bar.stage("compile", "Building the game for your Mac")
+        os.makedirs(self.work, exist_ok=True)
+        fill = {"{game}": game, "{out}": os.path.join(self.root, cfg.get("build_dir", "recomp")), "{work}": self.work,
+                "{setup}": self.setup, "{llvm}": self.llvm, "{macos}": os.path.normpath(os.path.join(self.setup, "..", "..", "MacOS"))}
+        args = [functools.reduce(lambda a, kv: a.replace(*kv), fill.items(), str(x)) for x in cfg["pipeline"][1:]]
+        p = subprocess.Popen([self.py, os.path.join(self.toolsrc, cfg["pipeline"][0]), *args], env=self.env,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        tail = []
+        for line in p.stdout:
+            if line.startswith("@progress "):
+                parts = line.split(" ", 2)
+                bar.text = parts[2].strip() if len(parts) > 2 else bar.text
+                bar.at(float(parts[1]))
+            else:
+                tail = (tail + [line.rstrip()])[-6:]
+        if p.wait() != 0:
+            raise Stop("Setup failed building the game: " + " ".join(tail)[-300:])
+        bar.finish()
+        bar.stage("link", "Putting it together")
+        bar.finish()
+
     def art(self, game, bar):
         """The launch window's art, read from the player's own files. A plain title is fine if this can't be done."""
         bar.stage("art", "Finishing up")
@@ -420,9 +448,12 @@ def main():
         check_game(dest, cfg)
     bar.finish()
     run.prepare(dest, bar)
-    run.lift_all(dest, bar)
-    run.compile_all(bar)
-    run.link(dest, bar)
+    if cfg.get("pipeline"):
+        run.pipeline(dest, bar)
+    else:
+        run.lift_all(dest, bar)
+        run.compile_all(bar)
+        run.link(dest, bar)
     run.art(dest, bar)
     ready = {"code": cfg["code"], "exe": sha256(find_ci(dest, cfg["exe"])), "when": int(time.time())}
     with open(os.path.join(a.root, cfg.get("build_dir", "recomp"), "ready.json"), "w") as f:
