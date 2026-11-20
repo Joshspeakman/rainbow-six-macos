@@ -1,5 +1,7 @@
 # Rainbow Six, native for Apple Silicon Macs and Linux
 
+![Rainbow Six, native on Apple Silicon](media/hero.jpg)
+
 [![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
 
 Red Storm's **Tom Clancy's Rainbow Six** (1998), statically recompiled from **your own GOG copy (version 1.04)** into
@@ -25,6 +27,13 @@ which takes almost no space), so the folder you installed from can be deleted af
 - [How it works](#how-it-works)
 - [Documentation](#documentation)
 - [Legal](#legal)
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The launch window](media/screenshots/screenshot-launcher.png) | ![Shooting range](media/screenshots/screenshot-01-shooting-range.jpg) |
+| ![Treeline](media/screenshots/screenshot-02-treeline.jpg) | ![Briefing](media/screenshots/screenshot-04-briefing.jpg) |
 
 ## Status
 
