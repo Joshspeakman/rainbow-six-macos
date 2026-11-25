@@ -597,6 +597,29 @@ static void on_objc_exception(NSException *e)
     w32_crash_report("crash", r, 0, 0);
 }
 
+/* Quick exit from a controller (with Command-Q and the game's own Quit menu): View + Menu held for 1.5 s quits, from
+ * any controller, in any game or menu. DS_QA_QUIT=hold (development) holds it 3 s after start. */
+static void quick_exit_watch(void)
+{
+    static dispatch_source_t t; static double since; static int qa = -1;
+    if (t) return;
+    if (qa < 0) qa = getenv("DS_QA_QUIT") && !strcmp(getenv("DS_QA_QUIT"), "hold");
+    double start = CACurrentMediaTime();
+    t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(t, DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC, 10 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(t, ^{
+        int held = qa && CACurrentMediaTime() - start >= 3;
+        for (GCController *c in GCController.controllers) {
+            GCExtendedGamepad *g = c.extendedGamepad;
+            if (g && g.buttonMenu.pressed && g.buttonOptions.pressed) held = 1;
+        }
+        if (!held) { since = 0; return; }
+        if (!since) since = CACurrentMediaTime();
+        else if (CACurrentMediaTime() - since >= 1.5) { fprintf(stderr, "host: quick exit (View + Menu held)\n"); [NSApp terminate:nil]; }
+    });
+    dispatch_resume(t);
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -661,7 +684,7 @@ int main(int argc, char **argv)
         windowed = !test_mode && getenv("DS_WINDOW_MODE") && !strcmp(getenv("DS_WINDOW_MODE"), "windowed");   // set by the launcher (r6_launcher.m) or the player
         if (test_mode) parse_script();
 
-        [NSApplication sharedApplication]; [NSApp setActivationPolicy:test_mode ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular];
+        [NSApplication sharedApplication]; [NSApp setActivationPolicy:test_mode ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular]; quick_exit_watch();
         AppDelegate *del = [AppDelegate new]; NSApp.delegate = del;
         raw_mouse_start();
         NSMenu *bar = [NSMenu new], *appm = [NSMenu new]; NSMenuItem *it = [NSMenuItem new]; it.submenu = appm; [bar addItem:it];
