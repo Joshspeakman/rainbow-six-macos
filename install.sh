@@ -119,5 +119,8 @@ if python3 "$HERE/recomp/tools/extract_icon.py" "$OUT/$EXE" "$I/df.ico" 2>/dev/n
   sips -z 512 512 "$I/df.png" --out "$I/df512.png" >/dev/null && sips -s format icns "$I/df512.png" --out "$A/Contents/Resources/icon.icns" >/dev/null 2>&1 || true
 fi
 rm -rf "$I"
+# Rainbow Six's launch window art (recomp/tools/r6_art.py): frames of the game's own movies (with ffmpeg) and GOG's box
+# and screenshots into <data>/art; what is there is kept, and the window does without it
+if [ "$G" = r6 ]; then python3 "$HERE/recomp/tools/r6_art.py" "$GAME" "$DATA/art" >/dev/null 2>&1 && echo "== the launch window's art: $DATA/art" || true; fi
 codesign --force --deep --sign - "$A" >/dev/null 2>&1 || true
 echo "== done: $A (data in $DATA)"

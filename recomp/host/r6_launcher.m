@@ -9,7 +9,18 @@
 // come from r6coop-launcher.json, which the mod ships next to its RainbowSix.exe (shared with the Windows and Linux
 // launchers); without it the window has only Quit and Play (and the game its own Options screen). The banner
 // is <game>/data/bitmap/mm_bg.RSB from the player's own copy.
+//
+// Dressed as the game is: the game's own title keyed out of its main menu (mm_bg.RSB) over frames of its intro and
+// ending, the menu's operatives and the store's screenshots drifting and crossfading behind the window, dust drifting,
+// far shots flashing, a portrait (the box's operative, else the menu's) in a teal sight's frame with a scan sweeping
+// down it, the menus' teal brackets on translucent panels. The still part is drawn once into a picture and again only
+// when what it shows changes; the glows are sprites drawn once; the timer runs in the modal loop's mode: 60 fps.
+// Art: <data>/art (tools/r6_art.py at install: intro-<n>.jpg, the movies' frames; store-portrait.jpg, store-shot-<n>.jpg,
+// GOG's box and screenshots), else Contents/Resources/art. DS_LAUNCHER_TIME=<s> (the clock), DS_LAUNCHER_ART=<folder>,
+// DS_LAUNCHER_TIMING=1 and DS_LAUNCHER_HOME=<folder> (the settings and art from there, not the data folder) for tests.
 #import <AppKit/AppKit.h>
+#import <GameController/GameController.h>
+#import <QuartzCore/QuartzCore.h>
 #import <CommonCrypto/CommonDigest.h>
 #include "../runtime/edition.h"
 
@@ -418,7 +429,7 @@ static BOOL load_spec(NSString *game)
 }
 
 // ---------------------------------------------------------------- the view
-enum { W = 760, H = 700, BANNER = 200, ROW_X = 70, ROW_W = W - 140, ROW_H = 46, LINE = 19 };
+enum { W = 980, H = 700, BANNER = 200, ROW_X = 48, ROW_W = 640, ROW_H = 46, LINE = 19 };   /* (the portrait to the rows' right) */
 enum { HIT_NONE = -1, HIT_QUIT = 1000, HIT_PLAY = 1001, HIT_ROW = 2000, HIT_GROUP = 3000, HIT_ACTION = 4000 };
 static NSColor *rgb(int r, int g, int b) { return [NSColor colorWithSRGBRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:1]; }
 #define TEAL rgb(46, 196, 196)
@@ -427,8 +438,8 @@ static NSColor *rgb(int r, int g, int b) { return [NSColor colorWithSRGBRed:r / 
 #define NOTE rgb(120, 160, 160)
 #define ACCENT rgb(255, 214, 58)
 #define BG rgb(6, 12, 14)
-#define PANEL rgb(10, 26, 30)
-#define PANEL_HOT rgb(16, 42, 46)
+#define PANEL [NSColor colorWithSRGBRed:10 / 255.0 green:26 / 255.0 blue:30 / 255.0 alpha:0.86]       /* (translucent over the backdrop) */
+#define PANEL_HOT [NSColor colorWithSRGBRed:16 / 255.0 green:42 / 255.0 blue:46 / 255.0 alpha:0.92]
 /* the Linux window's Arial at 96 dpi: Qt's points are a third larger than AppKit's */
 static NSFont *arial(CGFloat px, NSString *face) { return [NSFont fontWithName:face size:px] ?: [NSFont systemFontOfSize:px weight:NSFontWeightSemibold]; }
 #define F_TITLE arial(40, @"Arial-Black")
@@ -459,7 +470,8 @@ static void fill(NSRect r, NSColor *c) { [c setFill]; NSRectFill(r); }
 @interface DSLaunchView : NSView <NSTextFieldDelegate>
 @property NSInteger open, focus, hover, bind, scroll;     /* the open group (-1 none); the action waiting for a key (-1 none) */
 @property NSTextField *edit; @property NSString *editRid; @property CGFloat wheel;
-@property NSImage *art;
+@property NSImage *art, *logo, *portrait; @property NSArray<NSImage *> *scenes; @property CGFloat portraitFy, portraitZ, portraitFx;
+@property double t; @property NSMutableDictionary *cache;          /* the animation's clock; pictures drawn once */
 @property (copy) void (^onPlay)(void); @property (copy) void (^onQuit)(void);
 @end
 
@@ -548,13 +560,148 @@ static void fill(NSRect r, NSColor *c) { [c setFill]; NSRectFill(r); }
         draw_text(s, F_SMALL, binding ? ACCENT : TEXT, NSMakeRect(x + 186, y, cw - 24 - 186, LINE), NSTextAlignmentLeft);   /* Linux: 210 / 214; room for "RIGHT MOUSE" */
     }
 }
+// ---- the moving part (see the top of the file)
+static double hash01(double x) { double s = sin(x * 12.9898) * 43758.5453; return s - floor(s); }
+static NSImage *offscreen(NSSize size, CGFloat scale, void (^draw)(void))
+{
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:(NSInteger)ceil(size.width * scale) pixelsHigh:(NSInteger)ceil(size.height * scale)
+                                                                 bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSCalibratedRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+    rep = [rep bitmapImageRepByRetaggingWithColorSpace:NSColorSpace.sRGBColorSpace] ?: rep;
+    rep.size = size;
+    CGContextRef cg = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep].CGContext;
+    [NSGraphicsContext saveGraphicsState];
+    CGContextTranslateCTM(cg, 0, size.height); CGContextScaleCTM(cg, 1, -1);
+    [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithCGContext:cg flipped:YES]];
+    draw();
+    [NSGraphicsContext restoreGraphicsState];
+    NSImage *img = [[NSImage alloc] initWithSize:size]; [img addRepresentation:rep];
+    return img;
+}
+static void draw_fill_z(NSImage *img, NSRect r, CGFloat alpha, CGFloat z, CGFloat fx, CGFloat fy, NSImageInterpolation q)
+{
+    if (!img) return; NSSize s = img.size; if (s.width <= 0 || s.height <= 0) return;
+    CGFloat k = MAX(r.size.width / s.width, r.size.height / s.height) * z, w = r.size.width / k, h = r.size.height / k;
+    [img drawInRect:r fromRect:NSMakeRect((s.width - w) * fx, (s.height - h) * (1 - fy), w, h) operation:NSCompositingOperationSourceOver fraction:alpha respectFlipped:YES hints:@{NSImageHintInterpolation: @(q)}];
+}
+- (CGFloat)scale { return self.window ? self.window.backingScaleFactor : 2; }
+- (NSRect)portraitRect { return NSMakeRect(W - ROW_X - 236, BANNER + 18, 236, H - 84 - BANNER - 30); }
+- (NSImage *)sprite:(NSString *)key colors:(NSArray<NSColor *> *)cols
+{
+    NSImage *c = self.cache[key]; if (c) return c;
+    c = offscreen(NSMakeSize(128, 128), 1, ^{ [[[NSGradient alloc] initWithColors:cols] drawFromCenter:NSMakePoint(64, 64) radius:0 toCenter:NSMakePoint(64, 64) radius:64 options:0]; });
+    self.cache[key] = c; return c;
+}
+static void draw_sprite(NSImage *img, NSPoint c, CGFloat rx, CGFloat ry, CGFloat alpha)
+{
+    if (alpha <= 0.002) return;
+    [img drawInRect:NSMakeRect(c.x - rx, c.y - ry, 2 * rx, 2 * ry) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:MIN(1, alpha) respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationLow)}];
+}
+- (void)backdrop
+{
+    NSArray<NSImage *> *sc = self.scenes; NSUInteger n = sc.count; NSRect b = self.bounds; if (!n) return; double tt = MAX(0.0, self.t);
+    double per = 8.0, fadeT = 1.6;
+    void (^slide)(NSUInteger, double, CGFloat) = ^(NSUInteger j, double local, CGFloat a) {
+        double p = local / (per + fadeT); CGFloat dir = (j % 2) ? 1 : -1;
+        draw_fill_z(sc[j % n], b, a, (CGFloat)(1.04 + 0.07 * p), (CGFloat)(0.5 + dir * 0.10 * (p - 0.5)), (CGFloat)(0.45 + 0.05 * (p - 0.5)), NSImageInterpolationMedium);
+    };
+    if (n == 1) { draw_fill_z(sc[0], b, 1, (CGFloat)(1.08 + 0.035 * sin(tt * 0.11)), (CGFloat)(0.5 + 0.06 * sin(tt * 0.07)), 0.45, NSImageInterpolationMedium); return; }
+    NSUInteger k = (NSUInteger)(tt / per); double local = tt - (double)k * per;
+    if (local < fadeT && k > 0) { slide(k - 1, local + per, 1); slide(k, local, (CGFloat)(local / fadeT)); }
+    else slide(k, local, 1);
+}
+- (NSImage *)gradeImage   /* drawn once: the banner lighter, the rows' side dark, the edges darker */
+{
+    NSImage *c = self.cache[@"grade"]; if (c) return c;
+    NSRect b = self.bounds;
+    c = offscreen(b.size, 1, ^{
+        [[NSColor colorWithSRGBRed:0.02 green:0.10 blue:0.11 alpha:0.18] setFill]; NSRectFillUsingOperation(b, NSCompositingOperationSourceOver);
+        NSGradient *down = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithSRGBRed:0.01 green:0.03 blue:0.04 alpha:0.10], 0.0, [NSColor colorWithSRGBRed:0.01 green:0.03 blue:0.04 alpha:0.18], 0.24,
+                            [NSColor colorWithSRGBRed:0.01 green:0.03 blue:0.04 alpha:0.62], 0.36, [NSColor colorWithSRGBRed:0.01 green:0.03 blue:0.04 alpha:0.80], 1.0, nil];
+        [down drawInRect:b angle:-90];
+        NSGradient *side = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:0.65], 0.0, [NSColor colorWithWhite:0 alpha:0.30], 0.45, [NSColor colorWithWhite:0 alpha:0.0], 0.8, nil];
+        [side drawInRect:NSMakeRect(0, 0, W, BANNER) angle:0];
+    });
+    self.cache[@"grade"] = c; return c;
+}
+- (NSString *)signature
+{
+    return [NSString stringWithFormat:@"%ld|%ld|%ld|%ld|%ld|%@|%lu|%lu|%.0f|%lu", (long)self.open, (long)self.focus, (long)self.hover, (long)self.bind, (long)self.scroll,
+            self.editRid ?: @"", (unsigned long)values.description.hash, (unsigned long)keys.hash, self.scale, (unsigned long)top_ids.count];
+}
+static int frames_drawn;
 - (void)drawRect:(NSRect)dirty
 {
-    fill(self.bounds, BG);
-    if (self.art) [self.art drawInRect:NSMakeRect(0, 0, W, BANNER) fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1 respectFlipped:YES
+    NSRect b = self.bounds; double T = self.t; frames_drawn++;
+    if (!self.cache) self.cache = [NSMutableDictionary dictionary];
+    if (![self.cache[@"scale"] isEqual:@(self.scale)]) { [self.cache removeAllObjects]; self.cache[@"scale"] = @(self.scale); }
+    fill(b, BG);
+    [self backdrop];
+    [self.gradeImage drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationLow)}];
+    /* dust drifting; far shots flashing behind the banner; a glow behind the title */
+    NSImage *glow = [self sprite:@"glow" colors:@[[NSColor colorWithSRGBRed:0.85 green:0.10 blue:0.08 alpha:0.55], [NSColor colorWithSRGBRed:0.45 green:0.02 blue:0.02 alpha:0.15], [NSColor colorWithWhite:0 alpha:0]]];
+    draw_sprite(glow, NSMakePoint(200, 105), 260, 110, 0.35 + 0.12 * sin(T * 1.4));
+    NSImage *flash = [self sprite:@"flash" colors:@[[NSColor colorWithSRGBRed:1 green:0.85 blue:0.6 alpha:1], [NSColor colorWithSRGBRed:0.95 green:0.45 blue:0.1 alpha:0.35], [NSColor colorWithWhite:0 alpha:0]]];
+    for (int i = 0; i < 3; i++) {
+        double period = 4.6 + 1.8 * i, ph = fmod(T + i * 1.7, period), k = floor((T + i * 1.7) / period); if (ph > 0.6) continue;
+        double a = ph < 0.05 ? ph / 0.05 : pow(1 - (ph - 0.05) / 0.55, 2);
+        draw_sprite(flash, NSMakePoint(W * (0.40 + 0.55 * hash01(k * 3.7 + i)), BANNER * (0.35 + 0.5 * hash01(k * 1.9 + i))), 70 + 40 * hash01(k + i), 45, 0.30 * a);
+    }
+    for (int i = 0; i < 80; i++) {
+        double sx = hash01(i * 1.618), sy = hash01(i * 2.414 + 7), sp = 0.35 + hash01(i * 0.577 + 3);
+        double x = fmod(sx * (W + 60) - T * 14 * sp, W + 60); if (x < 0) x += W + 60; x -= 30;
+        double y = fmod(sy * (H + 20) + T * 5 * sp + 6 * sin(T * 0.8 * sp + i), H + 20) - 10;
+        [[NSColor colorWithSRGBRed:0.70 green:0.92 blue:0.92 alpha:0.06 + 0.14 * fabs(sin(T * 0.6 * sp + i))] setFill]; CGFloat r = (CGFloat)(0.5 + 0.9 * sp);
+        NSRectFillUsingOperation(NSMakeRect(x - r, y - r * 0.7, r * 2.2, r * 1.4), NSCompositingOperationSourceOver);
+    }
+    /* the portrait (its frame is in the still part), a scan sweeping down it */
+    {
+        NSRect in = NSInsetRect(self.portraitRect, 9, 9);
+        [NSGraphicsContext saveGraphicsState]; NSRectClip(in); fill(in, BG);
+        draw_fill_z(self.portrait, in, 1, (CGFloat)(self.portraitZ + 0.02 * sin(T * 0.21)), (CGFloat)(self.portraitFx + 0.01 * sin(T * 0.13)), self.portraitFy, NSImageInterpolationHigh);
+        double ph = fmod(T * 0.22, 1.0); CGFloat y = in.origin.y + ph * in.size.height;
+        [[[NSGradient alloc] initWithColors:@[[TEAL colorWithAlphaComponent:0], [TEAL colorWithAlphaComponent:0.18], [TEAL colorWithAlphaComponent:0]]] drawInRect:NSMakeRect(in.origin.x, y - 28, in.size.width, 56) angle:90];
+        [[NSColor colorWithWhite:0 alpha:0.12] setFill]; for (CGFloat ly = in.origin.y; ly < NSMaxY(in); ly += 3) NSRectFillUsingOperation(NSMakeRect(in.origin.x, ly, in.size.width, 1), NSCompositingOperationSourceOver);
+        [[[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:0], 0.62, [NSColor colorWithSRGBRed:0.01 green:0.03 blue:0.04 alpha:0.92], 1.0, nil] drawInRect:in angle:90];
+        [NSGraphicsContext restoreGraphicsState];
+    }
+    NSString *sig = self.signature;
+    if (!self.cache[@"ui"] || ![self.cache[@"uiSig"] isEqual:sig]) { self.cache[@"ui"] = offscreen(b.size, self.scale, ^{ [self drawStill]; }); self.cache[@"uiSig"] = sig; }
+    [(NSImage *)self.cache[@"ui"] drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    {   /* Play: its brackets breathing */
+        CGFloat d = 4 + 2 * sin(T * 2.2); brackets(NSInsetRect(self.playRect, -d, -d), [ACCENT colorWithAlphaComponent:0.35 + 0.3 * (0.5 + 0.5 * sin(T * 2.2))]);
+    }
+}
+- (void)drawStill
+{
+    if (self.logo) {                                                   /* the game's own title, keyed out of its main menu */
+        NSSize ls = self.logo.size; CGFloat lh = 150, lw = lh * ls.width / MAX(1, ls.height);
+        NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowBlurRadius = 6; sh.shadowOffset = NSMakeSize(0, -2);
+        [NSGraphicsContext saveGraphicsState]; [sh set];
+        [self.logo drawInRect:NSMakeRect(26, 12, lw, lh) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+        [NSGraphicsContext restoreGraphicsState];
+    }
+    else if (self.art) [self.art drawInRect:NSMakeRect(0, 0, 760, BANNER) fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1 respectFlipped:YES
                                   hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
     else draw_text(@"RAINBOW SIX", F_TITLE, NSColor.whiteColor, NSMakeRect(0, 60, W, 50), NSTextAlignmentCenter);
-    fill(NSMakeRect(0, BANNER - 24, W, 24), rgb(4, 8, 10));
+    {                                                                  /* the portrait's frame: a teal sight, its window clear */
+        NSRect pr = self.portraitRect, in = NSInsetRect(pr, 9, 9);
+        NSShadow *ps = [NSShadow new]; ps.shadowColor = [NSColor colorWithWhite:0 alpha:0.85]; ps.shadowBlurRadius = 16; ps.shadowOffset = NSMakeSize(0, -5);
+        [NSGraphicsContext saveGraphicsState]; [ps set]; fill(pr, rgb(8, 20, 24)); [NSGraphicsContext restoreGraphicsState];
+        [[[NSGradient alloc] initWithStartingColor:rgb(18, 44, 48) endingColor:rgb(6, 14, 16)] drawInRect:pr angle:-70];
+        [[TEAL_DIM colorWithAlphaComponent:0.9] setFill];
+        for (CGFloat ty = pr.origin.y + 20; ty < NSMaxY(pr) - 16; ty += 10) { CGFloat len = fmod(ty - pr.origin.y, 40) < 10 ? 5 : 3;
+            NSRectFill(NSMakeRect(pr.origin.x + 2, ty, len, 1)); NSRectFill(NSMakeRect(NSMaxX(pr) - 2 - len, ty, len, 1)); }
+        NSRectFillUsingOperation(in, NSCompositingOperationClear);
+        brackets(pr, TEAL); brackets(NSInsetRect(in, 6, 6), TEAL);
+        [[TEAL colorWithAlphaComponent:0.4] setStroke]; NSBezierPath *x = [NSBezierPath bezierPath]; x.lineWidth = 1;   /* the sight's cross */
+        CGFloat cx = NSMidX(in), cy = NSMidY(in) - 30;
+        [x appendBezierPathWithOvalInRect:NSMakeRect(cx - 9, cy - 9, 18, 18)];
+        [x moveToPoint:NSMakePoint(cx - 22, cy)]; [x lineToPoint:NSMakePoint(cx - 12, cy)]; [x moveToPoint:NSMakePoint(cx + 12, cy)]; [x lineToPoint:NSMakePoint(cx + 22, cy)];
+        [x moveToPoint:NSMakePoint(cx, cy - 22)]; [x lineToPoint:NSMakePoint(cx, cy - 12)]; [x moveToPoint:NSMakePoint(cx, cy + 12)]; [x lineToPoint:NSMakePoint(cx, cy + 22)]; [x stroke];
+        draw_text(@"TEAM RAINBOW", F_BIG, TEXT, NSMakeRect(in.origin.x, NSMaxY(in) - 34, in.size.width, 22), NSTextAlignmentCenter);
+        draw_text(@"RED STORM  ·  1998", F_SMALL, NOTE, NSMakeRect(in.origin.x, NSMaxY(in) - 15, in.size.width, 14), NSTextAlignmentCenter);
+    }
+    fill(NSMakeRect(0, BANNER - 24, W, 24), [NSColor colorWithSRGBRed:4 / 255.0 green:8 / 255.0 blue:10 / 255.0 alpha:0.75]);
     draw_text(have_spec ? [@"CO-OP EDITION  ·  " stringByAppendingString:version] : @"NATIVE EDITION FOR macOS", F_SMALL, ACCENT, NSMakeRect(0, BANNER - 22, W - 16, 20), NSTextAlignmentRight);
     fill(NSMakeRect(0, BANNER, W, 1), TEAL_DIM);
     if (self.open >= 0) {
@@ -729,7 +876,7 @@ static BOOL save_all(NSString *data, NSString *kmpName, NSString **why)
  * key (DS_LAUNCHER_KEY=<Mac key code> then presses one), DS_LAUNCHER_ROWS=1 prints every row's choices; DS_LAUNCHER_APPLY=1 then writes the files as Play would (without starting the game). */
 int ds_launcher_run(const char *game_dir, const char *data_dir)
 {
-    NSString *game = @(game_dir), *data = @(data_dir);
+    NSString *game = @(game_dir), *data = getenv("DS_LAUNCHER_HOME") ? @(getenv("DS_LAUNCHER_HOME")) : @(data_dir);
     rows = [NSMutableDictionary dictionary]; values = [NSMutableDictionary dictionary]; layouts = [NSMutableDictionary dictionary];
     key_names = [NSMutableDictionary dictionary]; vk_to_code = [NSMutableDictionary dictionary];
     row_order = [NSMutableArray array]; top_ids = @[]; groups = @[]; actions = @[]; mouse = @{}; version = @""; kmp_file = @"sherman.kmp";
@@ -756,6 +903,47 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     v.open = -1; v.bind = -1; v.hover = HIT_NONE;
     v.art = read_rsb([game stringByAppendingPathComponent:@"data/bitmap/mm_bg.RSB"], 16, 186);   /* the menu's art without its top and bottom */
     if (!v.art) { NSString *b = find_ci([game stringByAppendingPathComponent:@"data/bitmap"], @"mm_bg.RSB"); if (b) v.art = read_rsb(b, 16, 186); }
+    {   /* the title keyed out of the menu's picture (its brightness the opacity: it sits on black there); the slides; the portrait */
+        NSString *mm = [game stringByAppendingPathComponent:@"data/bitmap/mm_bg.RSB"];
+        if (![NSFileManager.defaultManager fileExistsAtPath:mm]) mm = find_ci([game stringByAppendingPathComponent:@"data/bitmap"], @"mm_bg.RSB");
+        NSImage *menu = mm ? read_rsb(mm, 0, 0) : nil;
+        CGImageRef cg = [menu CGImageForProposedRect:NULL context:nil hints:nil];
+        if (cg) {
+            size_t w = CGImageGetWidth(cg), h = CGImageGetHeight(cg), lw = w * 52 / 100; NSMutableData *px = [NSMutableData dataWithLength:w * h * 4];
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB(); CGContextRef c = CGBitmapContextCreate(px.mutableBytes, w, h, 8, w * 4, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+            CGContextDrawImage(c, CGRectMake(0, 0, w, h), cg); CGContextRelease(c);
+            uint8_t *d = px.mutableBytes; size_t y0 = h, y1 = 0;
+            for (size_t y = 16; y < MIN(h, (size_t)186); y++) for (size_t x = 0; x < lw; x++) { uint8_t *q = d + (y * w + x) * 4; if (MAX(q[0], MAX(q[1], q[2])) > 90) { if (y < y0) y0 = y; if (y > y1) y1 = y; } }   /* (the title, at the menu's top left) */
+            if (y1 > y0) {
+                y0 = y0 > 4 ? y0 - 4 : 0; y1 = MIN(h - 1, y1 + 4); size_t oh = y1 - y0 + 1; NSMutableData *o = [NSMutableData dataWithLength:lw * oh * 4]; uint8_t *od = o.mutableBytes;
+                for (size_t y = 0; y < oh; y++) for (size_t x = 0; x < lw; x++) {
+                    const uint8_t *q = d + ((y0 + y) * w + x) * 4; double m = MAX(q[0], MAX(q[1], q[2])) / 255.0, a = m < 0.06 ? 0 : MIN(1.0, m * 1.5);
+                    double edge = MIN((double)MIN(x, lw - 1 - x), 24.0) / 24.0; a *= edge;                  /* (feathered at the cut) */
+                    uint8_t *r = od + (y * lw + x) * 4; r[0] = (uint8_t)MIN(q[0], a * 255); r[1] = (uint8_t)MIN(q[1], a * 255); r[2] = (uint8_t)MIN(q[2], a * 255); r[3] = (uint8_t)(a * 255);
+                }
+                CGDataProviderRef dp = CGDataProviderCreateWithCFData((__bridge CFDataRef)o);
+                CGImageRef li = CGImageCreate(lw, oh, 8, 32, lw * 4, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast, dp, NULL, false, kCGRenderingIntentDefault);
+                if (li) { v.logo = [[NSImage alloc] initWithCGImage:li size:NSMakeSize(lw, oh)]; CGImageRelease(li); }
+                CGDataProviderRelease(dp);
+            }
+            CGColorSpaceRelease(cs);
+        }
+        NSString *artHome = getenv("DS_LAUNCHER_ART") ? @(getenv("DS_LAUNCHER_ART")) : [data stringByAppendingPathComponent:@"art"];
+        NSArray *dirs = getenv("DS_LAUNCHER_ART") ? @[artHome] : @[artHome, [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"art"]];
+        NSImage *(^pic)(NSString *) = ^NSImage *(NSString *name) {
+            for (NSString *dd in dirs) { NSImage *i = [[NSImage alloc] initWithContentsOfFile:[dd stringByAppendingPathComponent:name]]; if (i.size.width > 16) return i; }
+            return nil;
+        };
+        NSMutableArray *own = [NSMutableArray array], *store = [NSMutableArray array], *sc = [NSMutableArray array];
+        for (int k = 1; k <= 12; k++) { NSImage *i = pic([NSString stringWithFormat:@"intro-%d.jpg", k]); if (i) [own addObject:i]; }
+        for (int k = 1; k <= 6; k++) { NSImage *i = pic([NSString stringWithFormat:@"store-shot-%d.jpg", k]); if (i) [store addObject:i]; }
+        if (menu) [own insertObject:menu atIndex:MIN(own.count, (NSUInteger)2)];
+        for (NSUInteger k = 0; k < MAX(own.count, store.count); k++) { if (k < own.count) [sc addObject:own[k]]; if (k < store.count) [sc addObject:store[k]]; }
+        v.scenes = sc;
+        NSImage *box = pic(@"store-portrait.jpg");
+        if (box) { v.portrait = box; v.portraitFx = 0.55; v.portraitFy = 1.0; v.portraitZ = 1.48; }   /* the box's operative (its title cut off above) */
+        else { v.portrait = menu ?: v.art; v.portraitFx = 0.92; v.portraitFy = 0.4; v.portraitZ = 1.0; }   /* the menu's operative in his balaclava */
+    }
     if (shot) {   /* development: the window as an image */
         const char *e;
         if ((e = getenv("DS_LAUNCHER_PICK")) && layouts[@(e)]) [keys setData:layouts[@(e)]];
@@ -773,7 +961,16 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         if ((e = getenv("DS_LAUNCHER_KEY")) && v.bind >= 0)        /* that Mac key code pressed, as the window would get it */
             [v keyDown:[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil
                                       characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:(unsigned short)strtol(e, NULL, 0)]];
-        NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds]; [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
+        v.t = getenv("DS_LAUNCHER_TIME") ? atof(getenv("DS_LAUNCHER_TIME")) : 4.0;
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:(NSInteger)v.bounds.size.width * 2 pixelsHigh:(NSInteger)v.bounds.size.height * 2
+                                                                    bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSCalibratedRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+        rep.size = v.bounds.size;
+        [v displayRectIgnoringOpacity:v.bounds inContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
+        if (getenv("DS_LAUNCHER_TIMING")) {
+            double t0 = CACurrentMediaTime();
+            for (int k = 0; k < 60; k++) { v.t += 1.0 / 60; [v displayRectIgnoringOpacity:v.bounds inContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]]; }
+            fprintf(stderr, "frame: %.1f ms\n", (CACurrentMediaTime() - t0) * 1000 / 60);
+        }
         [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(shot) atomically:YES];
         if (getenv("DS_LAUNCHER_APPLY")) {          /* development: the files written as Play would */
             NSString *bad = online_check(); if (bad) printf("launcher: %s\n", bad.UTF8String);
@@ -810,7 +1007,16 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:w queue:nil usingBlock:^(NSNotification *n) { (void)n; [NSApp stopModal]; }];
     [NSApp activateIgnoringOtherApps:YES];
     [w makeKeyAndOrderFront:nil];
+    /* the animation, 60 times a second, in the modal loop's mode too */
+    double t0 = CACurrentMediaTime(); __weak DSLaunchView *wv = v;
+    NSTimer *anim = [NSTimer timerWithTimeInterval:1.0 / 60 repeats:YES block:^(NSTimer *tm) {
+        DSLaunchView *sv = wv; if (!sv) return;
+        double t = sv.t = CACurrentMediaTime() - t0; sv.needsDisplay = YES;
+        static double lastT; if (getenv("DS_LAUNCHER_TIMING") && t - lastT >= 1) { fprintf(stderr, "fps: %.0f\n", frames_drawn / (t - lastT)); frames_drawn = 0; lastT = t; if (t > 6) [NSApp stopModal]; }
+    }];
+    [[NSRunLoop currentRunLoop] addTimer:anim forMode:NSRunLoopCommonModes];
     [NSApp runModalForWindow:w];
+    [anim invalidate];
     [w orderOut:nil];
     if (!result) return 0;
     relay_env(data); apply();

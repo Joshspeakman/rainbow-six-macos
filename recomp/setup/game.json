@@ -58,5 +58,10 @@
   ],
   "style": "tactical",
   "title": "RAINBOW SIX",
-  "art_url": "https://images-2.gog-statics.com/64f4ce14baeaec1e04406ebf5e7238106219799f580cda3c9313ab32eec60821.jpg"
+  "art_url": "https://images-2.gog-statics.com/64f4ce14baeaec1e04406ebf5e7238106219799f580cda3c9313ab32eec60821.jpg",
+  "art": [
+    "r6_art.py",
+    "{game}",
+    "{art}"
+  ]
 }
