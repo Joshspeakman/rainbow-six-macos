@@ -673,10 +673,17 @@ static void draw_sprite(NSImage *img, NSPoint c, CGFloat rx, CGFloat ry, CGFloat
     });
     self.cache[@"grade"] = c; return c;
 }
-- (NSString *)signature
+static uint64_t fnv(const void *p, size_t n, uint64_t h)   /* a hash of every byte (NSString's and NSData's own hashes look only at their ends) */
 {
-    return [NSString stringWithFormat:@"%ld|%ld|%ld|%ld|%ld|%@|%lu|%lu|%.0f|%lu", (long)self.open, (long)self.focus, (long)self.hover, (long)self.bind, (long)self.scroll,
-            self.editRid ?: @"", (unsigned long)values.description.hash, (unsigned long)keys.hash, self.scale, (unsigned long)top_ids.count];
+    const uint8_t *b = p; for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; } return h;
+}
+- (NSString *)signature   /* what the still part shows: when it changes, the still part is drawn again */
+{
+    uint64_t h = 14695981039346656037ull;
+    for (NSString *k in [values.allKeys sortedArrayUsingSelector:@selector(compare:)]) { NSData *d = [[NSString stringWithFormat:@"%@=%@;", k, values[k]] dataUsingEncoding:NSUTF8StringEncoding]; h = fnv(d.bytes, d.length, h); }
+    h = fnv(keys.bytes, keys.length, h);
+    return [NSString stringWithFormat:@"%ld|%ld|%ld|%ld|%ld|%@|%llx|%.0f|%@", (long)self.open, (long)self.focus, (long)self.hover, (long)self.bind, (long)self.scroll,
+            self.editRid ?: @"", (unsigned long long)h, self.scale, [top_ids componentsJoinedByString:@","]];
 }
 static int frames_drawn;
 - (void)drawRect:(NSRect)dirty
