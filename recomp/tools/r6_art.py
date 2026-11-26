@@ -7,13 +7,14 @@ From the copy, with ffmpeg when it is installed: frames of the game's own Smacke
 ending), blown up and sharpened for the window: intro-<n>.jpg, the backdrop's slides. The window itself reads the main
 menu's pictures (data/bitmap/*.RSB) and keys the title out of mm_bg.RSB.
 From GOG (Tom Clancy's Rainbow Six, product 1207658752): store-portrait.jpg (the box), store-hero.jpg (the store
-page's background) and store-shot-<n>.jpg (its screenshots).
+page's background), store-key.png (the key art: the window's portrait and title) and store-shot-<n>.jpg (its screenshots).
 A file that is there already is kept. Nothing from the game is stored in the project: this runs on the player's Mac.
 """
 import json, os, shutil, subprocess, sys, urllib.request
 
 MOVIES = [('intro.smk', (0.12, 0.30, 0.48, 0.66, 0.84)), ('EndSplsh.smk', (0.25, 0.55))]
 GOG = 'https://api.gog.com/v2/games/1207658752'
+KEY_ART = 'https://images.gog-statics.com/eeef55fbde07676b7c9570b0fad4ba38a9a41c17b9575d5b24c69d503c87affa.png'   # the key art (1600x740)
 
 
 def find_ci(folder, *parts):
@@ -53,6 +54,7 @@ def store(art):
     except Exception: return
     links = d.get('_links', {})
     want = {'store-portrait.jpg': (links.get('boxArtImage') or {}).get('href'), 'store-hero.jpg': (links.get('backgroundImage') or {}).get('href')}
+    want['store-key.png'] = KEY_ART
     for k, s in enumerate(d.get('_embedded', {}).get('screenshots', [])[:6]):
         href = ((s.get('_links') or {}).get('self') or {}).get('href', '')
         if href: want['store-shot-%d.jpg' % (k + 1)] = href.replace('{formatter}', '1600')
@@ -61,7 +63,7 @@ def store(art):
         if not url or os.path.exists(out): continue
         try: data = fetch(url)
         except Exception: continue
-        if len(data) > 15000 and data[:3] == b'\xff\xd8\xff':
+        if len(data) > 15000 and (data[:3] == b'\xff\xd8\xff' or data[:8] == b'\x89PNG\r\n\x1a\n'):
             with open(out + '.part', 'wb') as f: f.write(data)
             os.replace(out + '.part', out)
 
