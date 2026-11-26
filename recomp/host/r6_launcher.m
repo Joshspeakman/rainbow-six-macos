@@ -732,11 +732,22 @@ static int frames_drawn;
             }
         }
     }
-    /* the portrait (its frame is in the still part), a scan sweeping down it */
+    /* the portrait (its frame is in the still part), a scan sweeping down it. With GOG's key art: the pistol's muzzle, his
+     * face and the title's whole SIX framing them, at the art's own scale; a soft shadow round the edges keeps the eye
+     * on his face */
     {
         NSRect in = NSInsetRect(self.portraitRect, 9, 9);
         [NSGraphicsContext saveGraphicsState]; NSRectClip(in); fill(in, BG);
-        draw_fill_z(self.portrait, in, 1, (CGFloat)(self.portraitZ + 0.02 * sin(T * 0.21)), (CGFloat)(self.portraitFx + 0.01 * sin(T * 0.13)), self.portraitFy, NSImageInterpolationHigh);
+        NSImage *pi = self.portrait;
+        draw_fill_z(pi, in, 1, (CGFloat)(self.portraitZ + 0.015 * (0.5 + 0.5 * sin(T * 0.21))), (CGFloat)(self.portraitFx + 0.004 * sin(T * 0.13)), self.portraitFy, NSImageInterpolationHigh);
+        if (self.logoHD) {   /* the shadow: clear on his face, deepening toward the edges and corners (no hard edge anywhere) */
+            CGContextRef cg = NSGraphicsContext.currentContext.CGContext; CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            CGFloat comps[] = {0.01, 0.03, 0.04, 0.0,  0.01, 0.03, 0.04, 0.30,  0.01, 0.03, 0.04, 0.78}, locs[] = {0.0, 0.55, 1.0};
+            CGGradientRef gr = CGGradientCreateWithColorComponents(cs, comps, locs, 3);
+            CGPoint c = CGPointMake(in.origin.x + in.size.width * 0.58, in.origin.y + in.size.height * 0.26);
+            CGContextDrawRadialGradient(cg, gr, c, 0, c, in.size.height * 0.95, kCGGradientDrawsAfterEndLocation);
+            CGGradientRelease(gr); CGColorSpaceRelease(cs);
+        }
         double ph = fmod(T * 0.22, 1.0); CGFloat y = in.origin.y + ph * in.size.height;
         [[[NSGradient alloc] initWithColors:@[[TEAL colorWithAlphaComponent:0], [TEAL colorWithAlphaComponent:0.18], [TEAL colorWithAlphaComponent:0]]] drawInRect:NSMakeRect(in.origin.x, y - 28, in.size.width, 56) angle:90];
         [[NSColor colorWithWhite:0 alpha:0.12] setFill]; for (CGFloat ly = in.origin.y; ly < NSMaxY(in); ly += 3) NSRectFillUsingOperation(NSMakeRect(in.origin.x, ly, in.size.width, 1), NSCompositingOperationSourceOver);
@@ -745,10 +756,10 @@ static int frames_drawn;
             [[NSColor colorWithSRGBRed:0.6 green:1 blue:0.6 alpha:0.10 + 0.12 * hash01(i + floor(T * 24))] setFill];
             NSRectFillUsingOperation(NSMakeRect(in.origin.x + gx * in.size.width, in.origin.y + gy * in.size.height, 1.2, 1.2), NSCompositingOperationSourceOver);
         }
-        [[[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithSRGBRed:0.01 green:0.03 blue:0.04 alpha:0.85], 0.0, [NSColor colorWithWhite:0 alpha:0], 0.16, nil] drawInRect:in angle:0];
         [[[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:0], 0.62, [NSColor colorWithSRGBRed:0.01 green:0.03 blue:0.04 alpha:0.92], 1.0, nil] drawInRect:in angle:90];
         {   /* the scope's reticle, settled on his face: it breathes a little, the range ticking */
-            NSPoint c = NSMakePoint(NSMidX(in) + 2 * sin(T * 0.7), in.origin.y + in.size.height * 0.30 + 1.5 * sin(T * 0.9)); CGFloat rr = 26 + 2 * sin(T * 1.3);
+            NSPoint c = NSMakePoint(in.origin.x + in.size.width * 0.60 + 2 * sin(T * 0.7), in.origin.y + in.size.height * 0.22 + 1.5 * sin(T * 0.9));
+            CGFloat rr = 24 + 2 * sin(T * 1.3);
             [[TEAL colorWithAlphaComponent:0.55] setStroke]; NSBezierPath *rt = [NSBezierPath bezierPath]; rt.lineWidth = 1;
             [rt appendBezierPathWithOvalInRect:NSMakeRect(c.x - rr, c.y - rr, 2 * rr, 2 * rr)];
             for (int k = 0; k < 4; k++) { double a = k * M_PI / 2; [rt moveToPoint:NSMakePoint(c.x + cos(a) * (rr - 6), c.y + sin(a) * (rr - 6))]; [rt lineToPoint:NSMakePoint(c.x + cos(a) * (rr + 10), c.y + sin(a) * (rr + 10))]; }
@@ -1106,7 +1117,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         __weak DSLaunchView *wv = v;
         void (^useKey)(NSImage *) = ^(NSImage *key) {   /* GOG's key art: the operative in his goggles (sharp at the portrait's size) and the title */
             DSLaunchView *sv = wv; if (!sv || key.size.width < 800) return;
-            sv.portrait = key; sv.portraitFx = 0.965; sv.portraitFy = 0.04; sv.portraitZ = 1.22;   /* (his face in the middle: 430 of the key art's pixels across, its own shape kept) */
+            sv.portrait = key; sv.portraitFx = 0.895; sv.portraitFy = 0.5; sv.portraitZ = 1.0;   /* (the muzzle, his face and the whole SIX: 527 of the key art's pixels across, its own shape kept) */
             NSImage *t = key_title(key); if (t) { sv.logo = t; sv.logoHD = YES; }
             [sv.cache removeObjectForKey:@"uiSig"]; sv.needsDisplay = YES;
         };
