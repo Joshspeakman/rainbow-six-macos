@@ -430,7 +430,7 @@ static BOOL load_spec(NSString *game)
 
 // ---------------------------------------------------------------- the view
 enum { W = 980, H = 700, BANNER = 200, ROW_X = 48, ROW_W = 588, ROW_H = 46, LINE = 19 };   /* (the portrait to the rows' right) */
-enum { HIT_NONE = -1, HIT_QUIT = 1000, HIT_PLAY = 1001, HIT_ROW = 2000, HIT_GROUP = 3000, HIT_ACTION = 4000 };
+enum { HIT_NONE = -1, HIT_QUIT = 1000, HIT_PLAY = 1001, HIT_HOME = 1002, HIT_ROW = 2000, HIT_GROUP = 3000, HIT_ACTION = 4000 };
 static NSColor *rgb(int r, int g, int b) { return [NSColor colorWithSRGBRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:1]; }
 #define TEAL rgb(46, 196, 196)
 #define TEAL_DIM rgb(24, 110, 112)
@@ -500,24 +500,19 @@ static void fill(NSRect r, NSColor *c) { [c setFill]; NSRectFill(r); }
 - (NSInteger)perColumn { return ((NSInteger)self.guideBox.size.height - 34) / LINE; }
 - (NSInteger)pages { NSInteger per = self.perColumn * 2; return MAX(1, ((NSInteger)actions.count + per - 1) / per); }
 // ---- geometry (the Linux window's)
-- (NSInteger)rowH   /* a panel's rows share the room between its title and the buttons: up to ROW_H tall, 4 apart */
+- (NSInteger)rowH   /* the page's rows share the column under its title: up to 70 tall (the mission page), 6 apart */
 {
     NSInteger n = (NSInteger)self.items.count;
-    return self.open < 0 || !n ? ROW_H : MIN(ROW_H, ((H - 84) - (BANNER + 54)) / n - 4);
+    return !n ? ROW_H : MIN(self.open < 0 ? 70 : 64, (626 - 112) / n - 6);
 }
-- (NSRect)rowRect:(NSInteger)k
-{
-    NSInteger h = self.rowH;
-    return NSMakeRect(ROW_X, (self.open < 0 ? BANNER + 18 : BANNER + 54) + k * (h + (self.open < 0 ? 6 : 4)), ROW_W, h);
-}
-- (NSRect)groupRect:(NSInteger)g
-{
-    NSInteger y = BANNER + 18 + (NSInteger)top_ids.count * (ROW_H + 6) + 12;
-    return NSMakeRect(ROW_X + (g % 2) * (ROW_W / 2 + 6), y + (g / 2) * 70, ROW_W / 2 - 6, 62);
-}
-- (NSRect)quitRect { return NSMakeRect(ROW_X, H - 70, 150, 48); }
-- (NSRect)playRect { return NSMakeRect(W - ROW_X - 280, H - 70, 280, 48); }
-- (NSRect)guideBox { return NSMakeRect(ROW_X, BANNER + 50, ROW_W, H - BANNER - 140); }
+- (NSRect)rowRect:(NSInteger)k { NSInteger h = self.rowH; return NSMakeRect(650, 112 + k * (h + 6), W - 650 - 20, h); }
+- (NSRect)homeRect { return NSMakeRect(20, 96, 178, 42); }                       /* the rail: the mission page, then a tab per group */
+- (NSRect)groupRect:(NSInteger)g { return NSMakeRect(20, 96 + (g + 1) * 48, 178, 42); }
+- (NSRect)mapRect { return NSMakeRect(212, 78, 424, 548); }
+- (NSRect)fileRect { NSRect last = [self groupRect:(NSInteger)groups.count - 1]; CGFloat y = groups.count ? NSMaxY(last) + 18 : 160; return NSMakeRect(20, y, 178, 626 - y); }
+- (NSRect)quitRect { return NSMakeRect(20, H - 56, 150, 42); }
+- (NSRect)playRect { return NSMakeRect(W - 20 - 300, H - 56, 300, 42); }
+- (NSRect)guideBox { return NSMakeRect(212, 112, W - 212 - 20, 514); }
 - (NSInteger)guideHit:(NSPoint)p
 {
     NSRect b = self.guideBox; NSInteger per = self.perColumn, x0 = (NSInteger)b.origin.x + 12, y0 = (NSInteger)b.origin.y + 30, x = (NSInteger)p.x, y = (NSInteger)p.y;
@@ -529,11 +524,11 @@ static void fill(NSRect r, NSColor *c) { [c setFill]; NSRectFill(r); }
 {
     if (NSPointInRect(p, self.quitRect)) return HIT_QUIT;
     if (NSPointInRect(p, self.playRect)) return HIT_PLAY;
+    if (NSPointInRect(p, self.homeRect)) return HIT_HOME;
+    for (NSInteger g = 0; g < (NSInteger)groups.count; g++) if (NSPointInRect(p, [self groupRect:g])) return HIT_GROUP + g;
     if (self.guide) { NSInteger a = [self guideHit:p]; return a >= 0 ? HIT_ACTION + a : HIT_NONE; }
-    NSInteger h = HIT_NONE;
-    for (NSInteger k = 0; k < (NSInteger)self.items.count; k++) if (NSPointInRect(p, [self rowRect:k])) h = HIT_ROW + k;
-    if (self.open < 0) for (NSInteger g = 0; g < (NSInteger)groups.count; g++) if (NSPointInRect(p, [self groupRect:g])) h = HIT_GROUP + g;
-    return h;
+    for (NSInteger k = 0; k < (NSInteger)self.items.count; k++) if (NSPointInRect(p, [self rowRect:k])) return HIT_ROW + k;
+    return HIT_NONE;
 }
 // ---- drawing
 - (void)plate:(NSRect)r hot:(BOOL)hot   /* a panel: dark teal glass, a lit top edge, the menus' brackets; a red tab when chosen */
@@ -568,26 +563,23 @@ static void fill(NSRect r, NSColor *c) { [c setFill]; NSRectFill(r); }
     fill(NSMakeRect(split, r.origin.y + 10, 1, r.size.height - 20), [NSColor colorWithWhite:1 alpha:0.45]);
     ktext(self.playNote, F_LBL(11.5), [NSColor colorWithWhite:1 alpha:0.9], 1.6, NSMakeRect(split + 8, r.origin.y, NSMaxX(r) - split - 14, r.size.height), NSTextAlignmentCenter);
 }
-- (void)drawRow:(NSInteger)k
+- (void)drawRow:(NSInteger)k   /* a setting on the page: its name, the arrows, the value large, its note */
 {
     NSString *rid = self.items[k]; NSRect r = [self rowRect:k]; BOOL hot = self.focus == k || self.hover == HIT_ROW + k;
     [self plate:r hot:hot];
-    CGFloat h = r.size.height, x = r.origin.x, top = r.origin.y + floor((h - 40) / 2);
-    BOOL text = [str(rows[rid][@"type"]) isEqualToString:@"text"]; CGFloat vw = r.size.width - 220 - (text ? 24 : 82);
-    ktext([str(rows[rid][@"label"]) uppercaseString], F_LBL(12.5), hot ? TEXT : NOTE, 1.5, NSMakeRect(x + 16, r.origin.y, 196, h), NSTextAlignmentLeft);
+    CGFloat x = r.origin.x, y = r.origin.y, h = r.size.height, w = r.size.width;
+    BOOL text = [str(rows[rid][@"type"]) isEqualToString:@"text"];
+    ktext([str(rows[rid][@"label"]) uppercaseString], F_LBL(11), hot ? TEAL : NOTE, 1.6, NSMakeRect(x + 14, y + 6, w - 96, 15), NSTextAlignmentLeft);
     NSString *val, *note; row_label(rid, &val, &note);
-    BOOL tight = h < 44;                                              /* a panel's many rows: smaller type */
-    NSRect vr = !note.length ? NSMakeRect(x + 220, r.origin.y + 2, vw, h) : tight ? NSMakeRect(x + 220, r.origin.y + 2, vw, h * 0.52) : NSMakeRect(x + 220, top + 1, vw, 22);
-    if (![self.editRid isEqualToString:rid]) draw_text(val, F_DISP(tight ? 16 : 19), hot ? NSColor.whiteColor : TEXT, vr, NSTextAlignmentLeft);
+    if (![self.editRid isEqualToString:rid]) draw_text(val, F_DISP(h >= 56 ? 21 : 18), hot ? NSColor.whiteColor : TEXT, NSMakeRect(x + 14, y + 20, w - 28, 26), NSTextAlignmentLeft);
     else { [TEAL setStroke]; NSBezierPath *b = [NSBezierPath bezierPathWithRect:NSInsetRect(self.edit.frame, -1.5, -1.5)]; b.lineWidth = 1; [b stroke]; }
-    draw_text(note, F_BODY(tight ? 11 : 12.5), NOTE, tight ? NSMakeRect(x + 220, r.origin.y + h * 0.52, vw, h * 0.42) : NSMakeRect(x + 220, top + 23, vw, 16), NSTextAlignmentLeft);
+    if (h >= 54) draw_text(note, F_BODY(11.5), NOTE, NSMakeRect(x + 14, y + h - 20, w - 28, 15), NSTextAlignmentLeft);
     if (!text) {
-        NSColor *ac = hot ? TEAL : TEAL_DIM; CGFloat cy = NSMidY(r) + 4;
-        tri(NSMakePoint(NSMaxX(r) - 62, cy), 6, NO, ac); tri(NSMakePoint(NSMaxX(r) - 22, cy), 6, YES, ac);
-        NSInteger n = (NSInteger)choices(rid).count, sel = choice_index(rid);      /* the choices as lights (a few of them) */
+        NSColor *ac = hot ? TEAL : TEAL_DIM; tri(NSMakePoint(NSMaxX(r) - 44, y + 14), 5.5, NO, ac); tri(NSMakePoint(NSMaxX(r) - 16, y + 14), 5.5, YES, ac);
+        NSInteger n = (NSInteger)choices(rid).count, sel = choice_index(rid);
         if (n >= 2 && n <= 6) for (NSInteger i = 0; i < n; i++)
-            fill(NSMakeRect(NSMaxX(r) - 42 - (n * 7 - 2) / 2.0 + i * 7, r.origin.y + 8, 4, 4), i == sel ? (hot ? RED : TEAL) : [TEAL_DIM colorWithAlphaComponent:0.55]);
-    } else ktext(@"EDIT", F_LBL(10), TEAL_DIM, 1.5, NSMakeRect(NSMaxX(r) - 52, r.origin.y, 40, h), NSTextAlignmentRight);
+            fill(NSMakeRect(NSMaxX(r) - 60 - (n - i) * 7, y + 12, 4, 4), i == sel ? (hot ? RED : TEAL) : [TEAL_DIM colorWithAlphaComponent:0.55]);
+    } else ktext(@"EDIT", F_LBL(10), TEAL_DIM, 1.5, NSMakeRect(NSMaxX(r) - 52, y + 6, 40, 15), NSTextAlignmentRight);
 }
 - (void)drawGuide
 {
@@ -633,8 +625,7 @@ static void draw_fill_z(NSImage *img, NSRect r, CGFloat alpha, CGFloat z, CGFloa
     [img drawInRect:r fromRect:NSMakeRect((s.width - w) * fx, (s.height - h) * (1 - fy), w, h) operation:NSCompositingOperationSourceOver fraction:alpha respectFlipped:YES hints:@{NSImageHintInterpolation: @(q)}];
 }
 - (CGFloat)scale { return self.window ? self.window.backingScaleFactor : 2; }
-- (NSRect)portraitRect { return NSMakeRect(W - ROW_X - 280, BANNER + 18, 280, H - 84 - BANNER - 30); }
-- (NSRect)statusRect { return NSMakeRect(W - ROW_X - 280, 22, 280, 150); }   /* the teams' board, over the portrait */
+- (NSRect)portraitRect { NSRect f = self.fileRect; return NSMakeRect(f.origin.x + 10, f.origin.y + 26, f.size.width - 20, f.size.height - 58); }   /* the dossier's photo */
 - (NSImage *)sprite:(NSString *)key colors:(NSArray<NSColor *> *)cols
 {
     NSImage *c = self.cache[key]; if (c) return c;
@@ -679,189 +670,237 @@ static void draw_sprite(NSImage *img, NSPoint c, CGFloat rx, CGFloat ry, CGFloat
             self.editRid ?: @"", (unsigned long)values.description.hash, (unsigned long)keys.hash, self.scale, (unsigned long)top_ids.count];
 }
 static int frames_drawn;
+/* the floor plan, in the map's own 0..1 coordinates: rooms (x, y, w, h), and each team's route through them */
+static const CGFloat ROOMS[][4] = {
+    {0.06, 0.06, 0.40, 0.22}, {0.46, 0.06, 0.24, 0.22}, {0.70, 0.06, 0.24, 0.30}, {0.06, 0.28, 0.20, 0.30}, {0.26, 0.28, 0.30, 0.16},
+    {0.26, 0.44, 0.30, 0.14}, {0.56, 0.28, 0.14, 0.30}, {0.70, 0.36, 0.24, 0.22}, {0.06, 0.58, 0.34, 0.20}, {0.40, 0.58, 0.30, 0.20},
+    {0.70, 0.58, 0.24, 0.20}, {0.06, 0.78, 0.22, 0.16}, {0.28, 0.78, 0.42, 0.16}, {0.70, 0.78, 0.24, 0.16}};
+static NSString *const ROOM_NAMES[] = {@"LOBBY", @"SECURITY", @"OFFICES", @"ARCHIVE", @"HALL", @"HALL", @"STAIRS", @"CONFERENCE", @"KITCHEN", @"SERVER ROOM",
+                                       @"VAULT", @"GARAGE", @"LOADING DOCK", @"GENERATOR"};
+static const CGFloat ROUTE[4][7][2] = {
+    {{0.02, 0.17}, {0.20, 0.17}, {0.36, 0.36}, {0.48, 0.36}, {0.63, 0.43}, {0.80, 0.47}, {0.82, 0.68}},          /* Red: lobby to the vault */
+    {{0.17, 0.98}, {0.17, 0.86}, {0.48, 0.86}, {0.55, 0.68}, {0.55, 0.68}, {0.55, 0.68}, {0.55, 0.68}},          /* Green: the dock to the servers */
+    {{0.98, 0.20}, {0.82, 0.20}, {0.58, 0.17}, {0.63, 0.32}, {0.63, 0.50}, {0.82, 0.47}, {0.82, 0.47}},          /* Gold: over the roof, down the stairs */
+    {{0.02, 0.68}, {0.22, 0.68}, {0.22, 0.44}, {0.16, 0.36}, {0.16, 0.36}, {0.16, 0.36}, {0.16, 0.36}}};         /* Blue: the archive */
+static NSPoint mpt(NSRect m, const CGFloat *q) { return NSMakePoint(m.origin.x + q[0] * m.size.width, m.origin.y + q[1] * m.size.height); }
+static double route_len(int t, int upto, NSRect m)
+{ double L = 0; for (int i = 1; i <= upto && i < 7; i++) { NSPoint a = mpt(m, ROUTE[t][i - 1]), b = mpt(m, ROUTE[t][i]); L += hypot(b.x - a.x, b.y - a.y); } return L; }
+static NSPoint route_at(int t, double d, NSRect m)   /* the point d along team t's route */
+{
+    for (int i = 1; i < 7; i++) { NSPoint a = mpt(m, ROUTE[t][i - 1]), b = mpt(m, ROUTE[t][i]); double l = hypot(b.x - a.x, b.y - a.y);
+        if (d <= l && l > 0) return NSMakePoint(a.x + (b.x - a.x) * d / l, a.y + (b.y - a.y) * d / l); d -= l; }
+    return mpt(m, ROUTE[t][6]);
+}
+- (NSImage *)planImage   /* drawn once: the blueprint, its grid, the building's walls and doors, rooms named, compass and scale */
+{
+    NSImage *c = self.cache[@"plan"]; if (c) return c;
+    NSRect m = self.mapRect;
+    c = offscreen(self.bounds.size, self.scale, ^{
+        [[[NSGradient alloc] initWithStartingColor:rgb(8, 28, 38) endingColor:rgb(4, 14, 20)] drawInRect:m relativeCenterPosition:NSMakePoint(0, 0.2)];
+        for (CGFloat gx = 0; gx <= m.size.width; gx += 14) fill(NSMakeRect(m.origin.x + gx, m.origin.y, 1, m.size.height), [TEAL colorWithAlphaComponent:fmod(gx, 70) < 1 ? 0.13 : 0.05]);
+        for (CGFloat gy = 0; gy <= m.size.height; gy += 14) fill(NSMakeRect(m.origin.x, m.origin.y + gy, m.size.width, 1), [TEAL colorWithAlphaComponent:fmod(gy, 70) < 1 ? 0.13 : 0.05]);
+        int nr = (int)(sizeof ROOMS / sizeof *ROOMS);
+        for (int i = 0; i < nr; i++) {
+            NSRect r = NSMakeRect(m.origin.x + ROOMS[i][0] * m.size.width, m.origin.y + ROOMS[i][1] * m.size.height, ROOMS[i][2] * m.size.width, ROOMS[i][3] * m.size.height);
+            [[TEAL colorWithAlphaComponent:0.06] setFill]; NSRectFillUsingOperation(NSInsetRect(r, 2, 2), NSCompositingOperationSourceOver);
+            NSBezierPath *wall = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 1, 1)]; wall.lineWidth = 2; [[rgb(150, 220, 226) colorWithAlphaComponent:0.55] setStroke]; [wall stroke];
+            [rgb(6, 20, 28) setFill];                                     /* doors: gaps in the walls, their swing drawn */
+            NSRect door = i % 2 ? NSMakeRect(NSMaxX(r) - 2.5, r.origin.y + r.size.height * 0.4, 4, 14) : NSMakeRect(r.origin.x + r.size.width * 0.45, NSMaxY(r) - 2.5, 14, 4);
+            NSRectFill(door);
+            NSBezierPath *sw = [NSBezierPath bezierPath]; sw.lineWidth = 0.75; [[TEAL colorWithAlphaComponent:0.35] setStroke];
+            if (i % 2) [sw appendBezierPathWithArcWithCenter:NSMakePoint(door.origin.x + 2, door.origin.y) radius:14 startAngle:90 endAngle:180 clockwise:NO];
+            else [sw appendBezierPathWithArcWithCenter:NSMakePoint(door.origin.x, door.origin.y + 2) radius:14 startAngle:270 endAngle:360 clockwise:NO];
+            [sw stroke];
+            if (i == 6) for (CGFloat sy = r.origin.y + 6; sy < NSMaxY(r) - 4; sy += 6) fill(NSMakeRect(r.origin.x + 5, sy, r.size.width - 10, 1), [TEAL colorWithAlphaComponent:0.30]);   /* the stairs' treads */
+            ktext(ROOM_NAMES[i], F_LBL(8.5), [TEAL colorWithAlphaComponent:0.55], 1.4, NSMakeRect(r.origin.x + 6, r.origin.y + 5, r.size.width - 10, 11), NSTextAlignmentLeft);
+        }
+        ktext(@"PLANNING  ·  EMBASSY  ·  FLOOR 1", F_LBL(10), TEAL, 2, NSMakeRect(m.origin.x + 10, NSMaxY(m) - 18, 260, 13), NSTextAlignmentLeft);
+        NSPoint cc = NSMakePoint(NSMaxX(m) - 26, m.origin.y + 28);   /* the compass */
+        NSBezierPath *ring = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(cc.x - 14, cc.y - 14, 28, 28)]; ring.lineWidth = 1; [[TEAL colorWithAlphaComponent:0.6] setStroke]; [ring stroke];
+        NSBezierPath *nd = [NSBezierPath bezierPath]; [nd moveToPoint:NSMakePoint(cc.x, cc.y - 12)]; [nd lineToPoint:NSMakePoint(cc.x + 4, cc.y)]; [nd lineToPoint:NSMakePoint(cc.x - 4, cc.y)]; [nd closePath]; [RED setFill]; [nd fill];
+        ktext(@"N", F_LBL(9), TEAL, 0, NSMakeRect(cc.x - 6, cc.y - 27, 12, 11), NSTextAlignmentCenter);
+        for (int k = 0; k < 4; k++) fill(NSMakeRect(NSMaxX(m) - 96 + k * 18, NSMaxY(m) - 14, 18, 3), k % 2 ? [TEAL colorWithAlphaComponent:0.3] : TEAL);   /* the scale bar */
+        ktext(@"10 M", F_LBL(8.5), TEAL, 1, NSMakeRect(NSMaxX(m) - 96, NSMaxY(m) - 27, 72, 11), NSTextAlignmentRight);
+        brackets(NSInsetRect(m, -3, -3), TEAL);
+        NSBezierPath *edge = [NSBezierPath bezierPathWithRect:NSInsetRect(m, 0.5, 0.5)]; edge.lineWidth = 1; [[TEAL_DIM colorWithAlphaComponent:0.9] setStroke]; [edge stroke];
+    });
+    self.cache[@"plan"] = c; return c;
+}
 - (void)drawRect:(NSRect)dirty
 {
     NSRect b = self.bounds; double T = self.t; frames_drawn++;
     if (!self.cache) self.cache = [NSMutableDictionary dictionary];
     if (![self.cache[@"scale"] isEqual:@(self.scale)]) { [self.cache removeAllObjects]; self.cache[@"scale"] = @(self.scale); }
-    fill(b, BG);
-    [self backdrop];
-    [self.gradeImage drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationLow)}];
-    /* dust drifting; far shots flashing behind the banner; a glow behind the title */
-    NSImage *glow = [self sprite:@"glow" colors:@[[NSColor colorWithSRGBRed:0.85 green:0.10 blue:0.08 alpha:0.55], [NSColor colorWithSRGBRed:0.45 green:0.02 blue:0.02 alpha:0.15], [NSColor colorWithWhite:0 alpha:0]]];
-    draw_sprite(glow, NSMakePoint(200, 105), 260, 110, 0.35 + 0.12 * sin(T * 1.4));
-    NSImage *flash = [self sprite:@"flash" colors:@[[NSColor colorWithSRGBRed:1 green:0.85 blue:0.6 alpha:1], [NSColor colorWithSRGBRed:0.95 green:0.45 blue:0.1 alpha:0.35], [NSColor colorWithWhite:0 alpha:0]]];
-    for (int i = 0; i < 3; i++) {
-        double period = 4.6 + 1.8 * i, ph = fmod(T + i * 1.7, period), k = floor((T + i * 1.7) / period); if (ph > 0.6) continue;
-        double a = ph < 0.05 ? ph / 0.05 : pow(1 - (ph - 0.05) / 0.55, 2);
-        draw_sprite(flash, NSMakePoint(W * (0.40 + 0.55 * hash01(k * 3.7 + i)), BANNER * (0.35 + 0.5 * hash01(k * 1.9 + i))), 70 + 40 * hash01(k + i), 45, 0.30 * a);
-    }
-    for (int i = 0; i < 80; i++) {
-        double sx = hash01(i * 1.618), sy = hash01(i * 2.414 + 7), sp = 0.35 + hash01(i * 0.577 + 3);
-        double x = fmod(sx * (W + 60) - T * 14 * sp, W + 60); if (x < 0) x += W + 60; x -= 30;
-        double y = fmod(sy * (H + 20) + T * 5 * sp + 6 * sin(T * 0.8 * sp + i), H + 20) - 10;
-        [[NSColor colorWithSRGBRed:0.70 green:0.92 blue:0.92 alpha:0.06 + 0.14 * fabs(sin(T * 0.6 * sp + i))] setFill]; CGFloat r = (CGFloat)(0.5 + 0.9 * sp);
-        NSRectFillUsingOperation(NSMakeRect(x - r, y - r * 0.7, r * 2.2, r * 1.4), NSCompositingOperationSourceOver);
-    }
-    {   /* the planning map: a faint grid, and a team's route drawing itself waypoint by waypoint, then fading */
-        NSImage *grid = self.cache[@"grid"];
-        if (!grid) { grid = offscreen(b.size, 1, ^{ [[TEAL colorWithAlphaComponent:0.045] setFill];
-                         for (CGFloat gx = 0; gx < W; gx += 28) NSRectFillUsingOperation(NSMakeRect(gx, 0, 1, H), NSCompositingOperationSourceOver);
-                         for (CGFloat gy = 0; gy < H; gy += 28) NSRectFillUsingOperation(NSMakeRect(0, gy, W, 1), NSCompositingOperationSourceOver);
-                     });
-                     self.cache[@"grid"] = grid; }
-        [grid drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
-    }
-    if (self.open < 0) {   /* on the main page, beside the Key Guide: a floor plan, rooms with their doors open */
-        NSImage *plan = self.cache[@"plan"];
-        if (!plan) { plan = offscreen(b.size, self.scale, ^{
-                         static const CGFloat rooms[][4] = {{0.36, 0.775, 0.10, 0.085}, {0.46, 0.775, 0.08, 0.05}, {0.46, 0.825, 0.08, 0.035}, {0.54, 0.775, 0.105, 0.085}};
-                         [[TEAL colorWithAlphaComponent:0.22] setStroke];
-                         for (int i = 0; i < 4; i++) { NSRect rr = NSMakeRect(rooms[i][0] * W, rooms[i][1] * H, rooms[i][2] * W, rooms[i][3] * H);
-                             NSBezierPath *w = [NSBezierPath bezierPathWithRect:NSInsetRect(rr, 0.5, 0.5)]; w.lineWidth = 1.5; [w stroke];
-                             [[NSColor colorWithSRGBRed:0.02 green:0.05 blue:0.06 alpha:1] setFill]; NSRectFill(NSMakeRect(NSMaxX(rr) - 1.5, rr.origin.y + rr.size.height * 0.35, 3, 12)); }
-                         ktext(@"PLAN  ·  EMBASSY, GROUND FLOOR", F_LBL(9.5), [TEAL colorWithAlphaComponent:0.45], 1.8, NSMakeRect(0.36 * W, 0.865 * H, 0.30 * W, 12), NSTextAlignmentLeft); });
-                     self.cache[@"plan"] = plan; }
-        [plan drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
-        static const CGFloat route[][2] = {{0.37, 0.85}, {0.41, 0.80}, {0.455, 0.835}, {0.50, 0.80}, {0.50, 0.845}, {0.56, 0.835}, {0.60, 0.79}, {0.63, 0.83}};
-        const int nr = 8; double cyc = 14.0, ph = fmod(T, cyc) / cyc; NSInteger team = (NSInteger)floor(T / cyc) % 4; NSColor *tc = team_colors()[team];
-        double drawn = MIN(1.0, ph / 0.7) * (nr - 1), fade = ph < 0.85 ? 1 : 1 - (ph - 0.85) / 0.15;
-        NSBezierPath *path = [NSBezierPath bezierPath]; path.lineWidth = 1.5; CGFloat dash[] = {6, 4}; [path setLineDash:dash count:2 phase:(CGFloat)(-T * 12)];
-        [path moveToPoint:NSMakePoint(route[0][0] * W, route[0][1] * H)];
-        for (int i = 1; i < nr && i - 1 < drawn; i++) { double f = MIN(1.0, drawn - (i - 1));
-            [path lineToPoint:NSMakePoint((route[i - 1][0] + (route[i][0] - route[i - 1][0]) * f) * W, (route[i - 1][1] + (route[i][1] - route[i - 1][1]) * f) * H)]; }
-        [[tc colorWithAlphaComponent:0.55 * fade] setStroke]; [path stroke];
-        for (int i = 0; i < nr && i <= drawn; i++) {   /* the waypoints: a diamond and its number */
-            NSPoint c = NSMakePoint(route[i][0] * W, route[i][1] * H); NSBezierPath *d = [NSBezierPath bezierPath];
-            [d moveToPoint:NSMakePoint(c.x, c.y - 5)]; [d lineToPoint:NSMakePoint(c.x + 5, c.y)]; [d lineToPoint:NSMakePoint(c.x, c.y + 5)]; [d lineToPoint:NSMakePoint(c.x - 5, c.y)]; [d closePath];
-            [[tc colorWithAlphaComponent:0.75 * fade] setFill]; [d fill];
-            draw_text([NSString stringWithFormat:@"%d", i + 1], F_LBL(9), [NSColor colorWithWhite:1 alpha:0.6 * fade], NSMakeRect(c.x + 6, c.y - 13, 20, 12), NSTextAlignmentLeft);
+    fill(b, rgb(3, 9, 12));
+    [NSGraphicsContext saveGraphicsState]; [[NSColor colorWithWhite:1 alpha:1] set];   /* the movie's frames, far back and dim */
+    [self backdrop]; [NSGraphicsContext restoreGraphicsState];
+    [[NSColor colorWithSRGBRed:0.01 green:0.04 blue:0.05 alpha:0.86] setFill]; NSRectFillUsingOperation(b, NSCompositingOperationSourceOver);
+    NSRect m = self.mapRect;
+    if (!self.guide) {
+        [self.planImage drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+        [NSGraphicsContext saveGraphicsState]; NSRectClip(m);
+        {   /* a scan sweeping across the plan */
+            double ph = fmod(T * 0.12, 1.0); CGFloat x = m.origin.x + ph * (m.size.width + 120) - 60;
+            [[[NSGradient alloc] initWithColors:@[[TEAL colorWithAlphaComponent:0], [TEAL colorWithAlphaComponent:0.10], [TEAL colorWithAlphaComponent:0]]] drawInRect:NSMakeRect(x - 60, m.origin.y, 120, m.size.height) angle:0];
         }
+        NSArray<NSColor *> *tc = team_colors(); static NSString *const GO[] = {@"ALPHA", @"BRAVO", @"CHARLIE", @"DELTA"};
+        for (int t = 0; t < 4; t++) {   /* each team's route, its waypoints, the team moving along it, its go code at the last */
+            int last = 6; while (last > 0 && ROUTE[t][last][0] == ROUTE[t][last - 1][0] && ROUTE[t][last][1] == ROUTE[t][last - 1][1]) last--;
+            double L = route_len(t, last, m), cyc = 16 + 3 * t, ph = fmod(T + t * 2.3, cyc) / cyc, d = MIN(1.0, ph / 0.8) * L, fade = ph < 0.9 ? 1 : 1 - (ph - 0.9) / 0.1;
+            NSBezierPath *path = [NSBezierPath bezierPath]; path.lineWidth = 1.6; CGFloat dash[] = {5, 4}; [path setLineDash:dash count:2 phase:(CGFloat)(-T * 10)];
+            NSPoint a0 = mpt(m, ROUTE[t][0]); [path moveToPoint:a0];
+            for (int i = 1; i <= last; i++) [path lineToPoint:mpt(m, ROUTE[t][i])];
+            [[tc[t] colorWithAlphaComponent:0.45] setStroke]; [path stroke];
+            for (int i = 1; i <= last; i++) {
+                NSPoint c = mpt(m, ROUTE[t][i]); BOOL reached = route_len(t, i, m) <= d;
+                NSBezierPath *dm = [NSBezierPath bezierPath]; [dm moveToPoint:NSMakePoint(c.x, c.y - 4.5)]; [dm lineToPoint:NSMakePoint(c.x + 4.5, c.y)]; [dm lineToPoint:NSMakePoint(c.x, c.y + 4.5)]; [dm lineToPoint:NSMakePoint(c.x - 4.5, c.y)]; [dm closePath];
+                [[tc[t] colorWithAlphaComponent:reached ? 0.95 : 0.4] setFill]; [dm fill];
+                draw_text([NSString stringWithFormat:@"%d", i], F_LBL(8), [NSColor colorWithWhite:1 alpha:reached ? 0.75 : 0.35], NSMakeRect(c.x + 5, c.y - 12, 14, 10), NSTextAlignmentLeft);
+            }
+            NSPoint g = mpt(m, ROUTE[t][last]); BOOL hold = d >= L;   /* the go code: waiting, then flashing when they arrive */
+            NSRect fl = NSMakeRect(g.x + 8, g.y + 2, 44, 12);
+            [[tc[t] colorWithAlphaComponent:hold ? 0.55 + 0.4 * (0.5 + 0.5 * sin(T * 8)) : 0.18] setFill]; NSRectFillUsingOperation(fl, NSCompositingOperationSourceOver);
+            ktext(GO[t], F_LBL(8), NSColor.whiteColor, 1, NSMakeRect(fl.origin.x, fl.origin.y, fl.size.width, 12), NSTextAlignmentCenter);
+            for (int k = 6; k >= 0; k--) {                               /* the team: four dots in file, a fading trail */
+                NSPoint q = route_at(t, MAX(0.0, d - k * 7), m); CGFloat r = k == 0 ? 4 : 2.6;
+                [[tc[t] colorWithAlphaComponent:(k == 0 ? 1 : 0.55 - 0.07 * k) * fade] setFill];
+                [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(q.x - r, q.y - r, 2 * r, 2 * r)] fill];
+            }
+            NSPoint lead = route_at(t, d, m);
+            draw_sprite([self sprite:[NSString stringWithFormat:@"led%d", t] colors:@[[tc[t] colorWithAlphaComponent:0.8], [tc[t] colorWithAlphaComponent:0.2], [NSColor colorWithWhite:0 alpha:0]]], lead, 12, 12, 0.7 * fade);
+        }
+        {   /* the surveillance feed: the game's own movie frames on a monitor, live */
+            NSRect cam = NSMakeRect(m.origin.x + 12, NSMaxY(m) - 36 - 112, 182, 112), in = NSInsetRect(cam, 4, 4);
+            fill(cam, rgb(2, 6, 8)); NSArray<NSImage *> *sc = self.scenes;
+            if (sc.count) {
+                NSUInteger k = (NSUInteger)(T / 3.5) % sc.count; double f = fmod(T, 3.5);
+                [NSGraphicsContext saveGraphicsState]; NSRectClip(in);
+                draw_fill_z(sc[k], in, 1, (CGFloat)(1.1 + 0.03 * f), 0.5, 0.5, NSImageInterpolationMedium);
+                if (f < 0.25) { [[NSColor colorWithWhite:1 alpha:(0.25 - f) * 1.6] setFill]; NSRectFillUsingOperation(in, NSCompositingOperationSourceOver); }   /* the cut: a flash of static */
+                [[NSColor colorWithSRGBRed:0.2 green:1 blue:0.8 alpha:0.10] setFill]; NSRectFillUsingOperation(in, NSCompositingOperationSourceOver);
+                [[NSColor colorWithWhite:0 alpha:0.22] setFill]; for (CGFloat ly = in.origin.y; ly < NSMaxY(in); ly += 2) NSRectFillUsingOperation(NSMakeRect(in.origin.x, ly, in.size.width, 1), NSCompositingOperationSourceOver);
+                [NSGraphicsContext restoreGraphicsState];
+            }
+            brackets(cam, TEAL);
+            if (fmod(T, 1.0) < 0.6) { [RED setFill]; [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(in.origin.x + 6, in.origin.y + 6, 6, 6)] fill]; }
+            ktext(@"CAM 02  ·  LIVE", F_LBL(8.5), NSColor.whiteColor, 1.4, NSMakeRect(in.origin.x + 16, in.origin.y + 3, 100, 11), NSTextAlignmentLeft);
+            int secs = (int)(T * 1) + 41520; ktext([NSString stringWithFormat:@"%02d:%02d:%02d", secs / 3600 % 24, secs / 60 % 60, secs % 60], F_LBL(8.5), NSColor.whiteColor, 1, NSMakeRect(NSMaxX(in) - 64, NSMaxY(in) - 14, 58, 11), NSTextAlignmentRight);
+        }
+        [NSGraphicsContext restoreGraphicsState];
     }
-    /* the portrait (its frame is in the still part), a scan sweeping down it */
-    {
-        NSRect in = NSInsetRect(self.portraitRect, 9, 9);
+    {   /* the dossier's photo (its frame is in the still part), a scan sweeping down it */
+        NSRect in = self.portraitRect;
         [NSGraphicsContext saveGraphicsState]; NSRectClip(in); fill(in, BG);
         draw_fill_z(self.portrait, in, 1, (CGFloat)(self.portraitZ + 0.02 * sin(T * 0.21)), (CGFloat)(self.portraitFx + 0.01 * sin(T * 0.13)), self.portraitFy, NSImageInterpolationHigh);
         double ph = fmod(T * 0.22, 1.0); CGFloat y = in.origin.y + ph * in.size.height;
-        [[[NSGradient alloc] initWithColors:@[[TEAL colorWithAlphaComponent:0], [TEAL colorWithAlphaComponent:0.18], [TEAL colorWithAlphaComponent:0]]] drawInRect:NSMakeRect(in.origin.x, y - 28, in.size.width, 56) angle:90];
+        [[[NSGradient alloc] initWithColors:@[[TEAL colorWithAlphaComponent:0], [TEAL colorWithAlphaComponent:0.18], [TEAL colorWithAlphaComponent:0]]] drawInRect:NSMakeRect(in.origin.x, y - 20, in.size.width, 40) angle:90];
         [[NSColor colorWithWhite:0 alpha:0.12] setFill]; for (CGFloat ly = in.origin.y; ly < NSMaxY(in); ly += 3) NSRectFillUsingOperation(NSMakeRect(in.origin.x, ly, in.size.width, 1), NSCompositingOperationSourceOver);
-        [[[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:0], 0.62, [NSColor colorWithSRGBRed:0.01 green:0.03 blue:0.04 alpha:0.92], 1.0, nil] drawInRect:in angle:90];
         [NSGraphicsContext restoreGraphicsState];
     }
     NSString *sig = self.signature;
     if (!self.cache[@"ui"] || ![self.cache[@"uiSig"] isEqual:sig]) { self.cache[@"ui"] = offscreen(b.size, self.scale, ^{ [self drawStill]; }); self.cache[@"uiSig"] = sig; }
     [(NSImage *)self.cache[@"ui"] drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
-    {   /* Play: its brackets breathing */
-        CGFloat d = 4 + 2 * sin(T * 2.2); brackets(NSInsetRect(self.playRect, -d, -d), [rgb(255, 96, 86) colorWithAlphaComponent:0.35 + 0.3 * (0.5 + 0.5 * sin(T * 2.2))]);
-    }
-    {   /* the teams' board: each team's light pulsing out of step, the mission clock running */
-        NSRect sr = self.statusRect; NSArray<NSColor *> *tc = team_colors();
+    {   /* the teams' lights in the top bar, pulsing out of step; the mission clock */
+        NSArray<NSColor *> *tc = team_colors();
         for (NSInteger i = 0; i < 4; i++) {
-            NSPoint c = NSMakePoint(NSMaxX(sr) - 84, sr.origin.y + 50 + i * 24); double a = 0.55 + 0.45 * (0.5 + 0.5 * sin(T * 2.4 + i * 1.3));
+            NSPoint c = NSMakePoint(W - 20 - 400 + 14 + i * 70, 34); double a = 0.55 + 0.45 * (0.5 + 0.5 * sin(T * 2.4 + i * 1.3));
             draw_sprite([self sprite:[NSString stringWithFormat:@"led%ld", (long)i] colors:@[[tc[i] colorWithAlphaComponent:0.9], [tc[i] colorWithAlphaComponent:0.25], [NSColor colorWithWhite:0 alpha:0]]], c, 9, 9, a);
             fill(NSMakeRect(c.x - 2.5, c.y - 2.5, 5, 5), [tc[i] blendedColorWithFraction:0.35 ofColor:NSColor.whiteColor]);
         }
-        int secs = (int)MAX(0.0, T); NSString *clock = [NSString stringWithFormat:@"%02d:%02d:%02d", secs / 3600, secs / 60 % 60, secs % 60];
-        ktext(clock, F_DISP(15), [TEAL colorWithAlphaComponent:0.95], 1.5, NSMakeRect(NSMaxX(sr) - 96, sr.origin.y + 9, 84, 18), NSTextAlignmentRight);
+        int secs = (int)MAX(0.0, T);
+        ktext([NSString stringWithFormat:@"%02d:%02d:%02d", secs / 3600, secs / 60 % 60, secs % 60], F_DISP(17), TEAL, 1.5, NSMakeRect(W - 20 - 80, 24, 80, 22), NSTextAlignmentRight);
+    }
+    {   /* Execute: its brackets breathing */
+        CGFloat d = 4 + 2 * sin(T * 2.2); brackets(NSInsetRect(self.playRect, -d, -d), [rgb(255, 96, 86) colorWithAlphaComponent:0.35 + 0.3 * (0.5 + 0.5 * sin(T * 2.2))]);
     }
 }
 - (void)drawStill
 {
-    if (self.logo) {                                                   /* the game's own title (keyed out of the key art, else its main menu) */
-        NSSize ls = self.logo.size; CGFloat lh = self.logoHD ? 150 : 140, lw = MIN(330, lh * ls.width / MAX(1, ls.height)); lh = lw * ls.height / MAX(1, ls.width);
-        NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowBlurRadius = 8; sh.shadowOffset = NSMakeSize(0, -2);
-        [NSGraphicsContext saveGraphicsState]; [sh set];
-        [self.logo drawInRect:NSMakeRect(30, 18 + (150 - lh) / 2, lw, lh) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
-        [NSGraphicsContext restoreGraphicsState];
+    {   /* the top bar: the title, the credit, the teams */
+        [[[NSGradient alloc] initWithStartingColor:rgb(10, 26, 30) endingColor:rgb(4, 12, 15)] drawInRect:NSMakeRect(0, 0, W, 64) angle:-90];
+        fill(NSMakeRect(0, 64, W, 1), TEAL_DIM); fill(NSMakeRect(20, 64, 60, 2), RED);
+        if (self.logo) {
+            NSSize ls = self.logo.size; CGFloat lh = 50, lw = lh * ls.width / MAX(1, ls.height);
+            NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowBlurRadius = 6;
+            [NSGraphicsContext saveGraphicsState]; [sh set];
+            [self.logo drawInRect:NSMakeRect(16, 7, lw, lh) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+            [NSGraphicsContext restoreGraphicsState];
+        } else ktext(@"RAINBOW SIX", F_DISP(28), NSColor.whiteColor, 3, NSMakeRect(20, 18, 200, 30), NSTextAlignmentLeft);
+        fill(NSMakeRect(140, 16, 1, 34), [TEAL_DIM colorWithAlphaComponent:0.8]);
+        ktext(@"RED STORM ENTERTAINMENT  ·  1998", F_LBL(11.5), TEAL, 2.4, NSMakeRect(154, 15, 330, 15), NSTextAlignmentLeft);
+        ktext(have_spec ? [NSString stringWithFormat:@"CO-OP EDITION %@  ·  NATIVE FOR APPLE SILICON  ·  METAL", version] : @"NATIVE FOR APPLE SILICON  ·  METAL", F_LBL(9.5), NOTE, 1.8,
+              NSMakeRect(154, 34, 400, 13), NSTextAlignmentLeft);
+        NSArray *names = @[@"RED", @"GREEN", @"GOLD", @"BLUE"];
+        for (NSInteger i = 0; i < 4; i++) ktext(names[i], F_DISP(14), TEXT, 1.8, NSMakeRect(W - 20 - 400 + 24 + i * 70, 26, 46, 18), NSTextAlignmentLeft);
+        fill(NSMakeRect(W - 20 - 96, 18, 1, 30), [TEAL_DIM colorWithAlphaComponent:0.8]);
+        ktext(@"MISSION", F_LBL(8.5), NOTE, 1.6, NSMakeRect(W - 20 - 80, 13, 80, 11), NSTextAlignmentRight);
     }
-    else if (self.art) [self.art drawInRect:NSMakeRect(0, 0, 760, BANNER) fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1 respectFlipped:YES
-                                  hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
-    else draw_text(@"RAINBOW SIX", F_TITLE, NSColor.whiteColor, NSMakeRect(0, 60, W, 50), NSTextAlignmentCenter);
-    {   /* the credit and the game in a sentence, beside the title */
-        CGFloat x0 = 380, x1 = self.statusRect.origin.x - 24;
-        ktext(@"RED STORM ENTERTAINMENT  ·  1998", F_LBL(12), TEAL, 2.4, NSMakeRect(x0, 46, x1 - x0, 16), NSTextAlignmentLeft);
-        fill(NSMakeRect(x0, 68, 46, 2), RED); fill(NSMakeRect(x0 + 50, 68.5, x1 - x0 - 50, 1), [TEAL_DIM colorWithAlphaComponent:0.7]);
-        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.lineSpacing = 2;
-        NSShadow *bs = [NSShadow new]; bs.shadowColor = [NSColor colorWithWhite:0 alpha:0.85]; bs.shadowBlurRadius = 4;
-        [@"John Clark's counter-terror unit plans every assault on the map to the second, then sends up to four teams through the door. One shot can end a mission."
-            drawWithRect:NSMakeRect(x0, 80, x1 - x0, 100) options:NSStringDrawingUsesLineFragmentOrigin
-            attributes:@{NSFontAttributeName: F_BODY(14.5), NSForegroundColorAttributeName: rgb(196, 218, 216), NSParagraphStyleAttributeName: ps, NSShadowAttributeName: bs}];
-    }
-    {   /* the teams' board (its lights and the clock are drawn live) */
-        NSRect sr = self.statusRect; NSArray<NSColor *> *tc = team_colors(); NSArray *names = @[@"RED", @"GREEN", @"GOLD", @"BLUE"];
-        [self plate:sr hot:NO];
-        ktext(@"TEAM STATUS", F_LBL(11.5), TEAL, 2.4, NSMakeRect(sr.origin.x + 14, sr.origin.y + 9, 140, 18), NSTextAlignmentLeft);
-        fill(NSMakeRect(sr.origin.x + 14, sr.origin.y + 31, sr.size.width - 28, 1), [TEAL_DIM colorWithAlphaComponent:0.7]);
-        for (NSInteger i = 0; i < 4; i++) {
-            CGFloat y = sr.origin.y + 38 + i * 24;
-            fill(NSMakeRect(sr.origin.x + 14, y + 4, 4, 16), tc[i]);
-            ktext(names[i], F_DISP(16), TEXT, 2, NSMakeRect(sr.origin.x + 26, y + 2, 80, 22), NSTextAlignmentLeft);
-            ktext(@"TEAM", F_LBL(10), NOTE, 1.5, NSMakeRect(sr.origin.x + 86, y + 2, 50, 22), NSTextAlignmentLeft);
-            ktext(@"READY", F_LBL(11), [tc[i] blendedColorWithFraction:0.25 ofColor:NSColor.whiteColor], 2, NSMakeRect(NSMaxX(sr) - 72, y + 2, 60, 22), NSTextAlignmentRight);
+    {   /* the rail: the mission page, a tab per group */
+        ktext(@"PLANNING", F_LBL(10), [TEAL colorWithAlphaComponent:0.8], 2.4, NSMakeRect(20, 78, 178, 13), NSTextAlignmentLeft);
+        NSMutableArray *tabs = [NSMutableArray arrayWithObject:@"MISSION"]; for (NSDictionary *g in groups) [tabs addObject:[g[@"title"] uppercaseString]];
+        for (NSInteger i = 0; i < (NSInteger)tabs.count; i++) {
+            NSRect r = i ? [self groupRect:i - 1] : self.homeRect;
+            BOOL on = i ? self.open == i - 1 : self.open < 0, hot = i ? (self.hover == HIT_GROUP + i - 1 || (self.open < 0 && self.focus == (NSInteger)top_ids.count + i - 1)) : self.hover == HIT_HOME;
+            [self plate:r hot:on || hot];
+            if (on) { fill(NSMakeRect(NSMaxX(r) - 4, r.origin.y + 6, 4, r.size.height - 12), RED);
+                      NSBezierPath *nub = [NSBezierPath bezierPath]; [nub moveToPoint:NSMakePoint(NSMaxX(r) + 2, NSMidY(r) - 7)]; [nub lineToPoint:NSMakePoint(NSMaxX(r) + 10, NSMidY(r))]; [nub lineToPoint:NSMakePoint(NSMaxX(r) + 2, NSMidY(r) + 7)]; [nub closePath]; [RED setFill]; [nub fill]; }
+            ktext([NSString stringWithFormat:@"%02ld", (long)i + 1], F_DISP(15), on ? RED : TEAL_DIM, 1, NSMakeRect(r.origin.x + 12, r.origin.y + 12, 26, 20), NSTextAlignmentLeft);
+            ktext(tabs[i], F_DISP(17), on ? NSColor.whiteColor : hot ? TEXT : NOTE, 2.2, NSMakeRect(r.origin.x + 40, r.origin.y + 12, r.size.width - 50, 22), NSTextAlignmentLeft);
         }
-        NSString *ed = have_spec ? [@"CO-OP " stringByAppendingString:version] : @"NATIVE";
-        NSFont *ef = F_LBL(10.5); CGFloat ew = [ed sizeWithAttributes:@{NSFontAttributeName: ef, NSKernAttributeName: @1.5}].width + 14;
-        NSRect er = NSMakeRect(sr.origin.x + 128, sr.origin.y + 9, ew, 17); fill(er, [RED colorWithAlphaComponent:0.85]);
-        ktext(ed, ef, NSColor.whiteColor, 1.5, NSInsetRect(er, 0, 0), NSTextAlignmentCenter);
-    }
-    {                                                                  /* the portrait's frame: a teal sight, its window clear */
-        NSRect pr = self.portraitRect, in = NSInsetRect(pr, 9, 9);
-        NSShadow *ps = [NSShadow new]; ps.shadowColor = [NSColor colorWithWhite:0 alpha:0.85]; ps.shadowBlurRadius = 16; ps.shadowOffset = NSMakeSize(0, -5);
-        [NSGraphicsContext saveGraphicsState]; [ps set]; fill(pr, rgb(8, 20, 24)); [NSGraphicsContext restoreGraphicsState];
-        [[[NSGradient alloc] initWithStartingColor:rgb(18, 44, 48) endingColor:rgb(6, 14, 16)] drawInRect:pr angle:-70];
-        [[TEAL_DIM colorWithAlphaComponent:0.9] setFill];
-        for (CGFloat ty = pr.origin.y + 20; ty < NSMaxY(pr) - 16; ty += 10) { CGFloat len = fmod(ty - pr.origin.y, 40) < 10 ? 5 : 3;
-            NSRectFill(NSMakeRect(pr.origin.x + 2, ty, len, 1)); NSRectFill(NSMakeRect(NSMaxX(pr) - 2 - len, ty, len, 1)); }
-        NSRectFillUsingOperation(in, NSCompositingOperationClear);
-        brackets(pr, TEAL); brackets(NSInsetRect(in, 6, 6), TEAL);
-        [[TEAL colorWithAlphaComponent:0.4] setStroke]; NSBezierPath *x = [NSBezierPath bezierPath]; x.lineWidth = 1;   /* the sight's cross */
-        CGFloat cx = NSMidX(in), cy = NSMidY(in) - 30;
-        [x appendBezierPathWithOvalInRect:NSMakeRect(cx - 9, cy - 9, 18, 18)];
-        [x moveToPoint:NSMakePoint(cx - 22, cy)]; [x lineToPoint:NSMakePoint(cx - 12, cy)]; [x moveToPoint:NSMakePoint(cx + 12, cy)]; [x lineToPoint:NSMakePoint(cx + 22, cy)];
-        [x moveToPoint:NSMakePoint(cx, cy - 22)]; [x lineToPoint:NSMakePoint(cx, cy - 12)]; [x moveToPoint:NSMakePoint(cx, cy + 12)]; [x lineToPoint:NSMakePoint(cx, cy + 22)]; [x stroke];
-        ktext(@"TEAM RAINBOW", F_DISP(22), NSColor.whiteColor, 3, NSMakeRect(in.origin.x, NSMaxY(in) - 42, in.size.width, 26), NSTextAlignmentCenter);
-        ktext(@"MULTINATIONAL  ·  COUNTER-TERROR", F_LBL(10.5), TEAL, 2, NSMakeRect(in.origin.x, NSMaxY(in) - 18, in.size.width, 14), NSTextAlignmentCenter);
-    }
-    fill(NSMakeRect(ROW_X, BANNER - 2, 46, 2), RED); fill(NSMakeRect(ROW_X + 50, BANNER - 1.5, ROW_W - 50, 1), [TEAL_DIM colorWithAlphaComponent:0.8]);
-    ktext(self.open >= 0 ? @"" : @"MISSION SETUP", F_LBL(11), [TEAL colorWithAlphaComponent:0.9], 2.4, NSMakeRect(ROW_X, BANNER - 22, 200, 16), NSTextAlignmentLeft);
-    ktext(@"NATIVE FOR APPLE SILICON  ·  METAL", F_LBL(10), [NOTE colorWithAlphaComponent:0.8], 2.2, NSMakeRect(NSMaxX(self.quitRect) + 20, H - 52, NSMinX(self.playRect) - NSMaxX(self.quitRect) - 40, 14), NSTextAlignmentCenter);
-    ktext(self.open >= 0 ? @"↑↓ choose  ·  ←→ change  ·  Esc goes back" : @"↑↓ choose  ·  ←→ change  ·  Return opens  ·  Esc quits", F_BODY(11.5), [NOTE colorWithAlphaComponent:0.75], 0.3,
-          NSMakeRect(NSMaxX(self.quitRect) + 20, H - 36, NSMinX(self.playRect) - NSMaxX(self.quitRect) - 40, 14), NSTextAlignmentCenter);
-    if (self.open >= 0) {
-        ktext(groups[self.open][@"title"], F_DISP(24), NSColor.whiteColor, 3, NSMakeRect(ROW_X, BANNER + 14, ROW_W, 30), NSTextAlignmentLeft);
-        if (self.guide) [self drawGuide];
-        else for (NSInteger k = 0; k < (NSInteger)self.items.count; k++) [self drawRow:k];
-    } else {
-        for (NSInteger k = 0; k < (NSInteger)top_ids.count; k++) [self drawRow:k];
-        for (NSInteger g = 0; g < (NSInteger)groups.count; g++) {
-            NSRect r = [self groupRect:g]; BOOL hot = self.focus == (NSInteger)top_ids.count + g || self.hover == HIT_GROUP + g;
-            [self plate:r hot:hot];
-            NSMutableArray *sum = [NSMutableArray array];
-            for (NSString *rid in groups[g][@"rows"]) { NSString *v, *n; row_label(rid, &v, &n); if (v.length) [sum addObject:v]; }
-            BOOL guide = [groups[g][@"guide"] boolValue];
-            NSString *big = guide ? (@{@"classic": @"Classic Keys", @"modern": @"Modern Keys", @"keyboard": @"Keyboard Only"}[layout_name()] ?: @"Custom Keys") : sum.firstObject ?: @"";
-            NSString *small = guide ? @"Every action's keys; rebind any of them" : sum.count > 1 ? [[sum subarrayWithRange:NSMakeRange(1, sum.count - 1)] componentsJoinedByString:@"  ·  "] : @"";
-            ktext([groups[g][@"title"] uppercaseString], F_LBL(11.5), hot ? TEAL : [TEAL colorWithAlphaComponent:0.85], 2.4, NSMakeRect(r.origin.x + 16, r.origin.y + 7, r.size.width - 60, 14), NSTextAlignmentLeft);
-            NSInteger nrows = guide ? 0 : (NSInteger)[groups[g][@"rows"] count];
-            for (NSInteger i = 0; i < MIN(nrows, (NSInteger)8); i++) fill(NSMakeRect(NSMaxX(r) - 16 - (MIN(nrows, 8) - i) * 6, r.origin.y + 10, 4, 4), i == 0 ? (hot ? RED : TEAL) : [TEAL_DIM colorWithAlphaComponent:0.6]);
-            draw_text(big, F_DISP(19), hot ? NSColor.whiteColor : TEXT, NSMakeRect(r.origin.x + 16, r.origin.y + 22, r.size.width - 30, 22), NSTextAlignmentLeft);
-            draw_text(small, F_BODY(12), NOTE, NSMakeRect(r.origin.x + 16, r.origin.y + 43, r.size.width - 30, 15), NSTextAlignmentLeft);
+        NSRect f = self.fileRect;   /* the dossier under the tabs: the key art's operative, clipped in */
+        if (f.size.height > 90) {
+            [self plate:f hot:NO];
+            ktext(@"OPERATIVE FILE", F_LBL(9.5), TEAL, 2, NSMakeRect(f.origin.x + 10, f.origin.y + 8, f.size.width - 20, 12), NSTextAlignmentLeft);
+            ktext(@"CLASSIFIED", F_LBL(8.5), RED, 2, NSMakeRect(f.origin.x + 10, f.origin.y + 8, f.size.width - 20, 12), NSTextAlignmentRight);
+            NSRect ph = self.portraitRect; NSRectFillUsingOperation(ph, NSCompositingOperationClear);
+            brackets(NSInsetRect(ph, -2, -2), TEAL);
+            ktext(@"TEAM RAINBOW", F_DISP(16), NSColor.whiteColor, 2.4, NSMakeRect(f.origin.x + 10, NSMaxY(f) - 27, f.size.width - 20, 20), NSTextAlignmentLeft);
         }
-        if (!have_spec) draw_text(@"No r6coop-launcher.json next to RainbowSix.exe: the game's own Options screen has its settings.", F_SMALL, NOTE,
-                                  NSMakeRect(ROW_X, groups.count ? NSMaxY([self groupRect:(NSInteger)groups.count - 1]) + 14 : BANNER + 30, ROW_W, 18), NSTextAlignmentLeft);
+    }
+    {   /* the page: its title, its rows (or the key guide over the map and the page) */
+        NSString *title = self.open < 0 ? @"MISSION SETUP" : [groups[self.open][@"title"] uppercaseString];
+        if (!self.guide) {
+            ktext(title, F_DISP(20), NSColor.whiteColor, 2.6, NSMakeRect(650, 80, W - 670, 24), NSTextAlignmentLeft);
+            fill(NSMakeRect(650, 104, 40, 2), RED); fill(NSMakeRect(694, 104.5, W - 714 - 694 + 650, 1), [TEAL_DIM colorWithAlphaComponent:0.8]);
+            for (NSInteger k = 0; k < (NSInteger)self.items.count; k++) [self drawRow:k];
+            if (!have_spec) draw_text(@"No r6coop-launcher.json next to RainbowSix.exe: the game's own Options screen has its settings.", F_BODY(12), NOTE, NSMakeRect(650, 120, W - 670, 36), NSTextAlignmentLeft);
+            if (self.open < 0) {   /* the mission page: a briefing under the rows */
+                CGFloat y0 = self.items.count ? NSMaxY([self rowRect:(NSInteger)self.items.count - 1]) + 16 : 130;
+                NSRect br = NSMakeRect(650, y0, W - 670, 626 - y0);
+                if (br.size.height > 150) {
+                    [self plate:br hot:NO];
+                    ktext(@"BRIEFING", F_LBL(10.5), TEAL, 2.4, NSMakeRect(br.origin.x + 14, br.origin.y + 10, 120, 13), NSTextAlignmentLeft);
+                    ktext(@"JOHN CLARK  ·  RAINBOW SIX", F_LBL(9.5), NOTE, 1.6, NSMakeRect(br.origin.x + 14, br.origin.y + 10, br.size.width - 28, 13), NSTextAlignmentRight);
+                    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.lineSpacing = 2;
+                    [@"A multinational counter-terror unit. Every assault is planned on the map to the second: waypoints, go codes and rules of engagement for up to four teams, then executed. One shot can end a mission."
+                        drawWithRect:NSMakeRect(br.origin.x + 14, br.origin.y + 32, br.size.width - 28, 92) options:NSStringDrawingUsesLineFragmentOrigin
+                        attributes:@{NSFontAttributeName: F_BODY(13.5), NSForegroundColorAttributeName: rgb(196, 218, 216), NSParagraphStyleAttributeName: ps}];
+                    NSArray *obj = @[@"Rescue the hostages", @"Neutralise every tango", @"Bring the team home"];
+                    CGFloat oy = br.origin.y + 132; ktext(@"OBJECTIVES", F_LBL(10), TEAL, 2.2, NSMakeRect(br.origin.x + 14, oy, 140, 13), NSTextAlignmentLeft);
+                    for (NSUInteger i = 0; i < obj.count && oy + 22 * (i + 1) + 14 < NSMaxY(br); i++) {
+                        NSRect bx = NSMakeRect(br.origin.x + 16, oy + 22 + 22 * i, 9, 9); NSBezierPath *bp = [NSBezierPath bezierPathWithRect:NSInsetRect(bx, 0.5, 0.5)]; [TEAL setStroke]; [bp stroke];
+                        ktext(obj[i], F_DISP(16), TEXT, 1.2, NSMakeRect(br.origin.x + 32, oy + 18 + 22 * i, br.size.width - 46, 18), NSTextAlignmentLeft);
+                    }
+                }
+            }
+        } else { ktext(title, F_DISP(20), NSColor.whiteColor, 2.6, NSMakeRect(212, 80, 400, 24), NSTextAlignmentLeft); [self drawGuide]; }
+    }
+    {   /* the bottom bar */
+        fill(NSMakeRect(0, H - 70, W, 1), [TEAL_DIM colorWithAlphaComponent:0.6]);
+        NSString *hint = self.guide ? @"Click an action, then press its key  ·  Esc goes back" : self.open >= 0 ? @"↑↓ choose  ·  ←→ change  ·  Esc: the mission page" : @"↑↓ choose  ·  ←→ change  ·  Return opens a tab  ·  Esc quits";
+        ktext(hint, F_BODY(12), [NOTE colorWithAlphaComponent:0.85], 0.3, NSMakeRect(NSMaxX(self.quitRect) + 16, H - 43, NSMinX(self.playRect) - NSMaxX(self.quitRect) - 32, 16), NSTextAlignmentCenter);
     }
     [self drawButton:self.quitRect title:self.open >= 0 ? @"BACK" : @"QUIT" primary:NO hot:self.hover == HIT_QUIT];
-    [self drawButton:self.playRect title:@"PLAY" primary:YES hot:self.hover == HIT_PLAY];
+    [self drawButton:self.playRect title:@"EXECUTE" primary:YES hot:self.hover == HIT_PLAY];
 }
 // ---- text rows: a field over the value, committed when it loses focus or on Return; Esc keeps the old text
 - (void)editBegin:(NSInteger)k
 {
     NSString *rid = self.items[k]; NSRect r = [self rowRect:k];
     NSTextField *e = [NSTextField textFieldWithString:values[rid] ?: @""];
-    e.frame = NSMakeRect(r.origin.x + 218, r.origin.y + floor((r.size.height - 24) / 2), r.size.width - 280, 24);
+    e.frame = NSMakeRect(r.origin.x + 12, r.origin.y + 21, r.size.width - 70, 24);
     e.bordered = NO; e.bezeled = NO; e.focusRingType = NSFocusRingTypeNone; e.drawsBackground = YES;
-    e.backgroundColor = rgb(12, 34, 38); e.textColor = TEXT; e.font = arial(14.5, @"ArialMT"); e.delegate = self;
+    e.backgroundColor = rgb(12, 34, 38); e.textColor = TEXT; e.font = F_DISP(18); e.delegate = self;
     [self addSubview:e]; self.edit = e; self.editRid = rid;
     [self.window makeFirstResponder:e]; [e selectText:nil];
     self.needsDisplay = YES;
@@ -902,15 +941,20 @@ static int frames_drawn;
     [self editEnd:YES];
     if (NSPointInRect(p, self.quitRect)) { [self back]; return; }
     if (NSPointInRect(p, self.playRect)) { [self play]; return; }
+    if (NSPointInRect(p, self.homeRect)) { if (self.open >= 0) [self back]; return; }
+    for (NSInteger g = 0; g < (NSInteger)groups.count; g++) if (NSPointInRect(p, [self groupRect:g])) {
+        if (self.open >= 0) { self.open = g; self.focus = 0; self.bind = -1; self.scroll = 0; self.hover = HIT_NONE; self.needsDisplay = YES; }
+        else [self activate:(NSInteger)top_ids.count + g];
+        return;
+    }
     if (self.guide) { NSInteger a = [self guideHit:p]; if (a >= 0) { self.bind = a; self.needsDisplay = YES; } return; }
     for (NSInteger k = 0; k < (NSInteger)self.items.count; k++) {
         NSRect r = [self rowRect:k]; if (!NSPointInRect(p, r)) continue;
         NSString *rid = self.items[k]; self.focus = k;
-        if (![str(rows[rid][@"type"]) isEqualToString:@"text"] && p.x >= NSMaxX(r) - 47 && p.x < NSMaxX(r) - 27) cycle(rid, -1);   /* the "<" */
+        if (![str(rows[rid][@"type"]) isEqualToString:@"text"] && p.x >= NSMaxX(r) - 56 && p.x < NSMaxX(r) - 30 && p.y < r.origin.y + 28) cycle(rid, -1);   /* the "<" */
         else [self activate:k];
         self.needsDisplay = YES; return;
     }
-    if (self.open < 0) for (NSInteger g = 0; g < (NSInteger)groups.count; g++) if (NSPointInRect(p, [self groupRect:g])) { [self activate:(NSInteger)top_ids.count + g]; return; }
 }
 - (void)scrollPage:(NSInteger)d { NSInteger s = MAX(0, MIN(self.pages - 1, self.scroll + d)); if (s != self.scroll) { self.scroll = s; self.needsDisplay = YES; } }
 - (void)scrollWheel:(NSEvent *)e
@@ -1098,7 +1142,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         __weak DSLaunchView *wv = v;
         void (^useKey)(NSImage *) = ^(NSImage *key) {   /* GOG's key art: the operative in his goggles (sharp at the portrait's size) and the title */
             DSLaunchView *sv = wv; if (!sv || key.size.width < 800) return;
-            sv.portrait = key; sv.portraitFx = 1.0; sv.portraitFy = 0.15; sv.portraitZ = 1.24;   /* (past the title's letters, to his goggles) */
+            sv.portrait = key; sv.portraitFx = 1.0; sv.portraitFy = 0.12; sv.portraitZ = 1.75;   /* (the dossier's tall photo: his goggles and face, past the title's letters) */
             NSImage *t = key_title(key); if (t) { sv.logo = t; sv.logoHD = YES; }
             [sv.cache removeObjectForKey:@"uiSig"]; sv.needsDisplay = YES;
         };
